@@ -12,8 +12,17 @@ def load_watchlist():
     return {"watchlist": [], "notes": {}, "created_at": datetime.now().isoformat()}
 
 def save_watchlist(wl):
-    with open(WATCHLIST_PATH, "w", encoding="utf-8") as f:
-        json.dump(wl, f, ensure_ascii=False, indent=2)
+    """Atomic write: save to temp file then rename to avoid corruption."""
+    tmp_path = WATCHLIST_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(wl, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, WATCHLIST_PATH)
+    except Exception:
+        # Clean up temp file on failure
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 def add_stock(symbol, note="", sector="", priority="medium"):
     wl = load_watchlist()

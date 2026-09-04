@@ -40,3 +40,17 @@ def test_update_existing(tmp_path):
         assert wl["watchlist"][0]["note"] == "new note"
     finally:
         watchlist.WATCHLIST_PATH = orig
+
+
+def test_atomic_write(tmp_path):
+    path = str(tmp_path / 'atomic.json')
+    orig2 = watchlist.WATCHLIST_PATH
+    watchlist.WATCHLIST_PATH = path
+    try:
+        watchlist.add_stock('US.AAPL', 'atomic test')
+        assert not os.path.exists(path + '.tmp')
+        with open(path) as f:
+            wl = json.load(f)
+        assert wl['watchlist'][0]['symbol'] == 'US.AAPL'
+    finally:
+        watchlist.WATCHLIST_PATH = orig2
