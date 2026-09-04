@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json, sys, os, time, urllib.request
+from cache_util import retry_call
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -13,8 +14,7 @@ def _yahoo_get_change(symbol, period="1d"):
     try:
         url = "https://query1.finance.yahoo.com/v8/finance/chart/" + symbol + "?" + "interval=1d" + chr(38) + "period=" + period
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read())
+        data = retry_call(lambda: (lambda: json.loads(urllib.request.urlopen(req, timeout=8)).read()))()
         result = data.get("chart", {}).get("result")
         if result and result[0]["indicators"]["quote"][0]["close"]:
             closes = result[0]["indicators"]["quote"][0]["close"]

@@ -1,3 +1,15 @@
+import time as _time
+
+def retry_call(fn, max_attempts=3, delay=1.0, exceptions=(Exception,)):
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except exceptions as e:
+            if attempt == max_attempts - 1:
+                raise
+            _time.sleep(delay * (2 ** attempt))
+
+
 """Cache utility for sector data - speeds up repeated lookups"""
 import json, os, time, hashlib
 from datetime import datetime, timedelta

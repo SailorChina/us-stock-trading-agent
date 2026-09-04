@@ -36,8 +36,7 @@ def _yahoo_get(symbol, period="5d"):
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
-        resp = urllib.request.urlopen(req, timeout=8)
-        data = json.loads(resp.read())
+        data = retry_call(lambda: (lambda: json.loads(urllib.request.urlopen(req, timeout=8)).read()))()
         r = data.get("chart", {}).get("result")
         if r and r[0]["indicators"]["quote"][0]["close"]:
             closes = r[0]["indicators"]["quote"][0]["close"]

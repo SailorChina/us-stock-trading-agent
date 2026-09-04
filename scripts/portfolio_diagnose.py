@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-import json,sys,argparse
+import json,sys,argparse,logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 def load_positions(json_input):
     json_input = json_input.strip()

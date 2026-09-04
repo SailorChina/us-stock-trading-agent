@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """US Stock News Sentiment Analysis - analyzes news sentiment for stocks"""
 import json, sys, argparse, urllib.request, re
+from cache_util import retry_call
 from datetime import datetime
 
 # Enhanced sentiment lexicons
@@ -53,8 +54,7 @@ def fetch_news(symbol, keyword=None, size=10):
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        resp = urllib.request.urlopen(req, timeout=10)
-        data = json.loads(resp.read())
+        data = retry_call(lambda: (lambda: json.loads(urllib.request.urlopen(req, timeout=10)).read()))()
         return data.get('data', [])
     except Exception as e:
         return []
