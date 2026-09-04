@@ -1,0 +1,40 @@
+{
+  "symbol": "US.NVDA",
+  "keyword": "NVDA",
+  "generated_at": "2026-09-04T11:09:40.491565",
+  "summary": {
+    "overall": "neutral",
+    "positive": 0,
+    "negative": 0,
+    "neutral": 5,
+    "avg_sentiment": 0.0,
+    "total_news": 5
+  },
+  "news": [
+    {
+      "title": "The 'Deeply Nerdy' Founders Behind Nvidia's $13 Billion Bet on Hugging Face -- WSJ",
+      "sentiment": 0.0,
+      "sentiment_label": "neutral"
+    },
+    {
+      "title": "新一代AI PC落地 联想Yoga搭载<em>英伟达</em>RTX Spark问世",
+      "sentiment": 0.0,
+      "sentiment_label": "neutral"
+    },
+    {
+      "title": "<em>英伟达</em>洽谈向Thinking Machines Lab投资约 25 亿美元",
+      "sentiment": 0.0,
+      "sentiment_label": "neutral"
+    },
+    {
+      "title": "联想集团携手<em>英伟达</em>，将千亿参数大模型装进笔记本",
+      "sentiment": 0.0,
+      "sentiment_label": "neutral"
+    },
+    {
+      "title": "9月4日外盘头条：美副总统万斯淡化伊朗冲突规模 OpenAI推出GPT-6 Astra <em>英伟达</em>130亿美元收购Hugging Face",
+      "sentiment": 0.0,
+      "sentiment_label": "neutral"
+    }
+  ]
+}
