@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-import json,sys,argparse,os,subprocess,re
+import json,sys,argparse,os,subprocess,re,logging
 from datetime import datetime
+from cache_util import retry_call
+logger = logging.getLogger(__name__)
+
 try:
     from futu import OpenQuoteContext, RET_OK, OpenSecTradeContext, TrdEnv, OrderType, TrdSide
     FUTU_OK=True

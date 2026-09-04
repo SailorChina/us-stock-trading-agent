@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Watchlist management - persistent stock watchlist with notes"""
-import json, sys, argparse, os
+import json, sys, argparse, os, logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 WATCHLIST_PATH = os.path.expanduser("~/.us_stock_watchlist.json")
 

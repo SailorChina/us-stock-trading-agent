@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """US Market Sentiment - with Yahoo Finance fallback for Basic tier"""
-import json, sys, argparse, urllib.request, time
+import json, sys, argparse, urllib.request, time, logging
 from datetime import datetime
+from cache_util import retry_call
+
+logger = logging.getLogger(__name__)
 from futu import OpenQuoteContext, RET_OK
 
 # Yahoo Finance mapping: Futu code -> Yahoo symbol
@@ -31,8 +34,7 @@ def _yahoo_get(symbol, period="5d"):
                 "Accept": "application/json",
                 "Accept-Language": "en-US,en;q=0.9",
             })
-            resp = urllib.request.urlopen(req, timeout=15)
-            data = json.loads(resp.read())
+            data = retry_call(lambda: json.loads(urllib.request.urlopen(req, timeout=15).read()))()
             result = data.get("chart", {}).get("result")
             if result and result[0]["indicators"]["quote"][0]["close"]:
                 closes = result[0]["indicators"]["quote"][0]["close"]
