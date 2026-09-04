@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import json, sys, argparse
 from datetime import datetime
 import pandas as pd
