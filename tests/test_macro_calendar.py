@@ -1,3 +1,4 @@
+import pytest
 import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 
@@ -12,6 +13,12 @@ def test_list_macro_events():
 
 
 def test_get_macro_snapshot():
+    import urllib.request
+    try:
+        urllib.request.urlopen('https://query1.finance.yahoo.com/v8/finance/chart/^VIX?interval=1d&period=5d', timeout=3)
+    except Exception:
+        import pytest
+        pytest.skip('Yahoo Finance unavailable')
     from macro_calendar import get_macro_snapshot
     snap = get_macro_snapshot()
     assert 'generated_at' in snap
