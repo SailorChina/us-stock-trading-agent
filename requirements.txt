@@ -1,0 +1,6 @@
+futu-api>=10.4.6408
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+akshare>=1.14
+pytest>=7.0
