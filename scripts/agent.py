@@ -6,7 +6,6 @@ from datetime import datetime
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-# Import all modules
 try:
     from us_stock_analyzer import normalize_symbol, get_price, get_tech_analysis, get_news
     from market_sentiment import get_market_overview, get_vix, get_magnificent_seven
@@ -23,6 +22,40 @@ except ImportError as e:
     MOD_OK = False
     print(f"Warning: some modules unavailable: {e}", file=sys.stderr)
 
+
+def _adjust_trade_plan(tp, current_price, atr):
+    """Adjust entry_zone to be near current price with pullback margin.
+    
+    stock_signals returns VWAP-based entry_zone which can be days old.
+    This recalculates entry relative to the latest close price.
+    """
+    if not tp or not current_price or current_price <= 0:
+        return tp
+    # Pull back 1.5% from current price as entry (wait for dip)
+    entry = round(current_price * 0.985, 2)
+    if atr and atr > 0:
+        stop = round(entry - atr * 2.0, 2)
+    else:
+        stop = round(entry * 0.95, 2)
+    risk = entry - stop
+    tp1 = round(entry + risk * 2.0, 2)
+    tp2 = round(entry + risk * 2.5, 2)
+    rr = round((tp1 - entry) / risk, 2) if risk > 0 else 0
+    return {
+        **tp,
+        "entry_zone": entry,
+        "stop_loss": stop,
+        "target_1": tp1,
+        "target_2": tp2,
+        "risk_reward": rr,
+        "risk_usd": round(risk * tp.get("position_size_pct", 3) * current_price / 100, 2),
+        "reward_usd": round((tp1 - entry) * tp.get("position_size_pct", 3) * current_price / 100, 2),
+        "current_price": current_price,
+        "atr": atr,
+        "entry_note": f"Adjusted from VWAP {tp.get('entry_zone')} to pullback entry near current price",
+    }
+
+
 def run_full_analysis(symbol, timeframe="1d"):
     """Run complete analysis for a stock"""
     print(f"Running full analysis for {symbol}...", file=sys.stderr)
@@ -32,13 +65,9 @@ def run_full_analysis(symbol, timeframe="1d"):
         "generated_at": datetime.now().isoformat(),
         "modules": {}
     }
-    # Price
     report["modules"]["price"] = get_price(symbol)
-    # Technical
     report["modules"]["tech"] = get_tech_analysis(symbol, timeframe)
-    # News
     report["modules"]["news"] = get_news(symbol)
-    # News sentiment
     try:
         news_data = report["modules"]["news"].get("data", {}).get("data", [])
         if news_data:
@@ -46,7 +75,6 @@ def run_full_analysis(symbol, timeframe="1d"):
             report["modules"]["news_sentiment"] = {"summary": get_sentiment_summary(sentiments), "news": analysis}
     except Exception:
         pass
-    # Options
     report["modules"]["options"] = {
         "iv": {"value": get_futu_iv(symbol), "status": "ok" if get_futu_iv(symbol) else "unavailable"},
         "pcr": {"value": get_options_pcr(symbol), "status": "ok" if get_options_pcr(symbol) else "unavailable"},
@@ -55,30 +83,40 @@ def run_full_analysis(symbol, timeframe="1d"):
     report["elapsed_sec"] = round(time.time() - t0, 1)
     return report
 
+
 def run_quick_signal(symbol):
-    """Get quick buy/sell signal"""
+    """Get quick buy/sell signal with price-adjusted trade plan"""
     try:
         data = get_tech_analysis(symbol)["data"]
         rating = data.get("rating", "")
         score = data.get("score", 0)
         tp = data.get("trade_plan", {})
-        rr = tp.get("risk_reward", 0)
+        ta = data.get("technical_analysis", {})
         signals = data.get("summary", {}).get("signals", [])
+        
+        # Get current price and ATR
+        price_data = get_price(symbol).get("data", {})
+        current_price = price_data.get("latest_price", 0)
+        atr = ta.get("atr_14")
+        
+        # Adjust trade plan entry to be near current price
+        adjusted_tp = _adjust_trade_plan(tp, current_price, atr)
+        rr = adjusted_tp.get("risk_reward", 0)
         
         signal = {
             "symbol": symbol,
+            "current_price": current_price,
             "rating": rating,
             "score": score,
             "signals": signals,
             "resonance": data.get("resonance", {}).get("alignment", ""),
-            "trade_plan": tp,
+            "trade_plan": adjusted_tp,
             "action": None
         }
         
-        # Determine action
         if rating in ("Overweight", "Buy", "Strong Buy") and score >= 60 and rr >= 2.0:
             signal["action"] = "BUY"
-            signal["reason"] = f"{rating} score={score} RR={rr}:1"
+            signal["reason"] = f"{rating} score={score} RR={rr}:1 entry={adjusted_tp.get('entry_zone')}"
         elif rating in ("Underweight", "Sell", "Strong Sell"):
             signal["action"] = "SELL"
             signal["reason"] = f"{rating}"
@@ -90,6 +128,7 @@ def run_quick_signal(symbol):
     except Exception as e:
         return {"symbol": symbol, "error": str(e)}
 
+
 def main():
     parser = argparse.ArgumentParser(description="US Stock Trading Agent v2",
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -98,7 +137,7 @@ Examples:
   python agent.py analyze NVDA               # Full analysis
   python agent.py signal AAPL                # Quick signal
   python agent.py watchlist                  # List watchlist
-  python agent.py watchlist add MSFT "均线"  # Add to watchlist
+  python agent.py watchlist add MSFT \"均线\"  # Add to watchlist
   python agent.py checklist                  # Pre-market check
   python agent.py report NVDA                # Quick report
 """)
@@ -131,11 +170,10 @@ Examples:
         if args.json:
             output = json.dumps(result, ensure_ascii=False, indent=2)
         elif args.verbose:
-            # Show full tech data
             tech = get_tech_analysis(symbol, args.timeframe)
             output = json.dumps({"signal": result, "tech": tech}, ensure_ascii=False, indent=2)
         else:
-            output = json.dumps({k: v for k, v in result.items() if k in ("symbol", "rating", "score", "action", "reason", "trade_plan")}, ensure_ascii=False, indent=2)
+            output = json.dumps({k: v for k, v in result.items() if k in ("symbol", "current_price", "rating", "score", "action", "reason", "trade_plan")}, ensure_ascii=False, indent=2)
     elif args.command == "watchlist":
         result = load_watchlist()
         output = json.dumps(result, ensure_ascii=False, indent=2)
