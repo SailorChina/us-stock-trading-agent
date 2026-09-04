@@ -12,10 +12,14 @@ description: >
   - 选股与板块扫描
   - 市场情绪与VIX分析
   - 新闻情感分析
+  - 盘前/盘后异动监控
+  - 宏观经济日历
+  - 回测与策略验证
   
   触发关键词：美股分析、股票分析、买卖信号、选股、交易计划、
   技术分析、资金流向、期权异动、情绪分析、持仓诊断、
-  止损止盈、仓位管理、板块轮动、美股推荐、NVDA分析、TSLA分析
+  止损止盈、仓位管理、板块轮动、美股推荐、NVDA分析、TSLA分析、
+  盘前扫描、宏观日历、回测、Risk Manager
 metadata:
   version: 2.0.0
   author: agent-builder
@@ -29,3 +33,5 @@ metadata:
     - futu-comment-sentiment
     - python >= 3.10
     - futu-api >= 10.4.6408
+    - pandas >= 2.0
+    - stock_signals (富途牛牛量化)
