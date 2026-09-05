@@ -12,6 +12,7 @@ try:
     from news_sentiment import fetch_news, analyze_news, get_sentiment_summary
     from options_analysis import get_futu_iv, get_options_pcr, get_unusual_options
     from watchlist import load_watchlist, add_stock, remove_stock
+    from smart_money_screener import scan_smart_money
     from daily_checklist import pre_market_check, check_stock
     from trade_journal import add_trade, list_trades
     from risk_manager import generate_risk_report, dynamic_position_size
@@ -72,7 +73,7 @@ def run_full_analysis(symbol, timeframe="1d"):
         news_data = report["modules"]["news"].get("data", {}).get("data", [])
         if news_data:
             analysis, sentiments = analyze_news(news_data)
-            report["modules"]["news_sentiment"] = {"summary": get_sentiment_summary(sentiments), "news": analysis}
+            report["modules"]["news_sentiment"] = {"signals": get_sentiment_summary(sentiments), "news": analysis}
     except Exception:
         pass
     report["modules"]["options"] = {
@@ -91,13 +92,13 @@ def run_quick_signal(symbol):
         rating = data.get("rating", "")
         score = data.get("score", 0)
         tp = data.get("trade_plan", {})
-        ta = data.get("technical_analysis", {})
-        signals = data.get("summary", {}).get("signals", [])
+        ta = data.get("indicators", {})
+        signals = data.get("signals", [])
         
         # Get current price and ATR
-        price_data = get_price(symbol).get("data", {})
+        price_data = get_price(symbol) or {}
         current_price = price_data.get("latest_price", 0)
-        atr = ta.get("atr_14")
+        atr = ta.get("atr")
         
         # Adjust trade plan entry to be near current price
         adjusted_tp = _adjust_trade_plan(tp, current_price, atr)
@@ -141,7 +142,7 @@ Examples:
   python agent.py checklist                  # Pre-market check
   python agent.py report NVDA                # Quick report
 """)
-    parser.add_argument("command", choices=["analyze", "signal", "watchlist", "checklist", "report"],
+    parser.add_argument("command", choices=["analyze", "signal", "watchlist", "checklist", "report", "smart_money"],
                        help="Command to run")
     parser.add_argument("symbol", nargs="?", help="Stock symbol (e.g., NVDA, US.NVDA)")
     parser.add_argument("--timeframe", default="1d")
@@ -199,6 +200,10 @@ Examples:
         if args.json or args.verbose:
             report["price"] = price.get("data", {})
         output = json.dumps(report, ensure_ascii=False, indent=2)
+
+    elif args.command == 'smart_money':
+        result = scan_smart_money(top_n=15, min_score=20)
+        output = json.dumps({'generated_at': datetime.now().isoformat(), 'results': result}, ensure_ascii=False, indent=2, default=str)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
