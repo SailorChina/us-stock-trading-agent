@@ -6,16 +6,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cache_util import get_cached
 
-try:
-    from stock_signals.screener import scan_parallel, ScanConfig
-    from stock_signals.sector import get_sector_ranking
-    from stock_signals.meme_tracker import get_meme_stocks, get_meme_bonus
-    from stock_signals.indicators import fetch_kline
-    from stock_signals.scoring import compute_rating
-    from stock_signals.sector import get_sector_bonus
-    LIB_OK = True
-except ImportError as e:
-    LIB_OK = False
+LIB_OK = False
 
 DEFAULT_TIMEOUT_SCAN = 300
 DEFAULT_TIMEOUT_SECTOR = 120
@@ -90,7 +81,7 @@ def _fetch_sector_sina():
 
 def run_sector(top=10, timeout=DEFAULT_TIMEOUT_SECTOR):
     if not LIB_OK:
-        return {"status": "error", "error": "stock_signals library unavailable"}
+        return {"status": "error", "error": "library unavailable"}
     t0 = time.time()
     try:
         items, cached = get_cached("sectors_us", _fetch_sector_sina, ttl_minutes=30)
@@ -110,7 +101,7 @@ def run_sector(top=10, timeout=DEFAULT_TIMEOUT_SECTOR):
 
 def run_scan(min_score=55, max_picks=10, timeout=DEFAULT_TIMEOUT_SCAN):
     if not LIB_OK:
-        return {"status": "error", "error": "stock_signals library unavailable"}
+        return {"status": "error", "error": "library unavailable"}
     t0 = time.time()
     config = ScanConfig(min_score=float(min_score), max_per_market=max_picks)
     try:
@@ -124,7 +115,7 @@ def run_scan(min_score=55, max_picks=10, timeout=DEFAULT_TIMEOUT_SCAN):
 
 def run_meme_scan(timeout=DEFAULT_TIMEOUT_MEME):
     if not LIB_OK:
-        return {"status": "error", "error": "stock_signals library unavailable"}
+        return {"status": "error", "error": "library unavailable"}
     t0 = time.time()
     try:
         stocks = get_meme_stocks()

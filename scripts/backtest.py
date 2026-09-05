@@ -4,7 +4,6 @@ from datetime import datetime
 import pandas as pd
 
 try:
-    from stock_signals.indicators import fetch_kline
     HAS_FETCH=True
 except ImportError:
     HAS_FETCH=False
@@ -83,7 +82,7 @@ def main():
     print(f"获取 {a.symbol} K线 ({a.period}, count={a.count})...", file=sys.stderr)
 
     if not HAS_FETCH:
-        print(json.dumps({"error": "stock_signals.indicators.fetch_kline不可用"}, ensure_ascii=False, indent=2))
+        print(json.dumps({"error": "fetch_kline unavailable"}, ensure_ascii=False, indent=2))
         sys.exit(1)
 
     df = fetch_kline(a.symbol, ktype=ktype, num=a.count)

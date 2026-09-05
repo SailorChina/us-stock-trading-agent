@@ -26,7 +26,7 @@ except ImportError as e:
 def _adjust_trade_plan(tp, current_price, atr):
     """Adjust entry_zone to be near current price with pullback margin.
     
-    stock_signals returns VWAP-based entry_zone which can be days old.
+    VWAP-based entry_zone can be days old.
     This recalculates entry relative to the latest close price.
     """
     if not tp or not current_price or current_price <= 0:

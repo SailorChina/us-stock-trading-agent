@@ -6,17 +6,9 @@ from datetime import datetime
 
 # Add paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-FUTU_PATH = r"C:\Users\sailor\Desktop\富途牛牛量化"
-if FUTU_PATH not in sys.path:
-    sys.path.insert(0, FUTU_PATH)
 sys.path.insert(0, SCRIPT_DIR)
 
-try:
-    from stock_signals.indicators import fetch_kline
-    HAS_SIGNALS = True
-except ImportError as e:
-    HAS_SIGNALS = False
-    print(f"Warning: stock_signals not available: {e}", file=sys.stderr)
+HAS_SIGNALS = False
 
 # Symbol normalization
 SYMBOL_MAP = {
@@ -69,18 +61,18 @@ def get_tech_analysis(symbol, timeframe="1d"):
     result = {"module": "tech", "status": "pending"}
     if not HAS_SIGNALS:
         result["status"] = "skipped"
-        result["error"] = "stock_signals not available"
+        result["error"] = "library unavailable"
         return result
     try:
         import io
         _old_stdout = sys.stdout
         sys.stdout = _fake_stdout = io.StringIO()
         try:
-            from stock_signals.cli import analyze as tech_analyze
+            tech_analyze = None
             data = tech_analyze(symbol, timeframe=timeframe, output_json=True)
         finally:
             sys.stdout = _old_stdout
-        # Fix last_time bug: stock_signals returns wrong date (2017), override with actual kline date
+        # Fix last_time: override with actual kline date
         try:
             df = fetch_kline(symbol, ktype="1d", num=5)
             if df is not None and len(df) > 0:

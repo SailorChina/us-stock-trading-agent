@@ -6,8 +6,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cache_util import get_cached
 
 try:
-    from stock_signals.indicators import fetch_kline
-    from stock_signals.cli import analyze as tech_analyze
     HAS_SIGNALS = True
 except ImportError:
     HAS_SIGNALS = False

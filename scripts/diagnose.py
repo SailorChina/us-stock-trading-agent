@@ -80,14 +80,6 @@ def check_yahoo_finance():
             else:
                 return {"yahoo_finance_ok": False, "error": str(e)}
 
-def check_stock_signals():
-    try:
-        from stock_signals.indicators import fetch_kline
-        df = fetch_kline("US.NVDA", ktype="1d", num=5)
-        ok = isinstance(df, type(None)) is False and len(df) > 0
-        return {"stock_signals_ok": ok, "rows": len(df) if ok else 0}
-    except Exception as e:
-        return {"stock_signals_ok": False, "error": str(e)}
 
 def main():
     report = {
@@ -97,8 +89,7 @@ def main():
         "futu_opend": check_futu_opend(),
         "futu_basic": check_futu_basic(),
         "news_api": check_news_api(),
-        "stock_signals": check_stock_signals(),
-        "yahoo_finance": check_yahoo_finance(),
+                "yahoo_finance": check_yahoo_finance(),
             }
     # Summary
     all_ok = True
