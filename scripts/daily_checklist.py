@@ -5,10 +5,7 @@ from datetime import datetime, time as dt_time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cache_util import get_cached
 
-try:
-    HAS_SIGNALS = True
-except ImportError:
-    HAS_SIGNALS = False
+from tech_engine import generate_signal, get_price
 
 try:
     from market_sentiment import get_vix, get_market_overview
@@ -22,13 +19,14 @@ def check_stock(symbol):
     """Check a single stock for signals"""
     result = {"symbol": symbol, "timestamp": datetime.now().isoformat()}
     try:
-        data = tech_analyze(symbol, timeframe="1d", output_json=True)
-        result["rating"] = data.get("rating", "")
-        result["score"] = data.get("score", 0)
-        result["trade_plan"] = data.get("trade_plan", {})
-        result["signals"] = data.get("summary", {}).get("signals", [])
-        result["resonance"] = data.get("resonance", {}).get("alignment", "")
-        result["price"] = data.get("last_close", 0)
+        data = generate_signal(symbol, timeframe="1d", num_bars=60)
+        dd = data.get("data", data)
+        result["rating"] = dd.get("rating", "")
+        result["score"] = dd.get("score", 0)
+        result["trade_plan"] = dd.get("trade_plan", {})
+        result["signals"] = dd.get("signals", [])
+        result["resonance"] = ""
+        result["price"] = dd.get("price", {}).get("latest_price", 0) if dd.get("price") else 0
         result["status"] = "ok"
     except Exception as e:
         result["status"] = "error"

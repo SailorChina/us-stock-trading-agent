@@ -15,7 +15,7 @@
 ## 测试状态
 
 ```
-41 passed, 2 skipped (网络依赖)
+43 passed (全部通过)
 pytest tests/ -q
 ```
 
@@ -206,7 +206,6 @@ numpy >= 1.24
 scipy >= 1.10
 akshare >= 1.14
 pytest >= 7.0
-stock_signals (富途牛牛量化)
 ```
 
 ## 运行测试

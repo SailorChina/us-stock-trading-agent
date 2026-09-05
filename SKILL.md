@@ -25,7 +25,6 @@ metadata:
   author: agent-builder
   requires:
     - futuapi
-    - tech-signal-FUTU-skill
     - futu-capital-anomaly
     - futu-derivatives-anomaly
     - futu-technical-anomaly
@@ -34,4 +33,3 @@ metadata:
     - python >= 3.10
     - futu-api >= 10.4.6408
     - pandas >= 2.0
-    - stock_signals (富途牛牛量化)

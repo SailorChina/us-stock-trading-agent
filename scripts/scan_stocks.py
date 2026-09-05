@@ -6,11 +6,12 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cache_util import get_cached
 
-LIB_OK = False
+from tech_engine import scan_premarket, scan_hot_list, get_price
 
 DEFAULT_TIMEOUT_SCAN = 300
 DEFAULT_TIMEOUT_SECTOR = 120
 DEFAULT_TIMEOUT_MEME = 60
+DEFAULT_TIMEOUT_PREMARKET = 30
 
 _YAHOO_SECTOR = {
     "IBB": "Biotechnology", "XOP": "Oil and Gas E and P", "XBI": "Biotech SPDR",
@@ -80,8 +81,6 @@ def _fetch_sector_sina():
     return items
 
 def run_sector(top=10, timeout=DEFAULT_TIMEOUT_SECTOR):
-    if not LIB_OK:
-        return {"status": "error", "error": "library unavailable"}
     t0 = time.time()
     try:
         items, cached = get_cached("sectors_us", _fetch_sector_sina, ttl_minutes=30)
@@ -100,8 +99,6 @@ def run_sector(top=10, timeout=DEFAULT_TIMEOUT_SECTOR):
         return {"status": "error", "elapsed_sec": round(elapsed, 1), "error": str(e)}
 
 def run_scan(min_score=55, max_picks=10, timeout=DEFAULT_TIMEOUT_SCAN):
-    if not LIB_OK:
-        return {"status": "error", "error": "library unavailable"}
     t0 = time.time()
     config = ScanConfig(min_score=float(min_score), max_per_market=max_picks)
     try:
@@ -114,8 +111,6 @@ def run_scan(min_score=55, max_picks=10, timeout=DEFAULT_TIMEOUT_SCAN):
         return {"status": "error", "elapsed_sec": round(elapsed, 1), "error": str(e)}
 
 def run_meme_scan(timeout=DEFAULT_TIMEOUT_MEME):
-    if not LIB_OK:
-        return {"status": "error", "error": "library unavailable"}
     t0 = time.time()
     try:
         stocks = get_meme_stocks()
@@ -149,14 +144,14 @@ def run_meme_scan(timeout=DEFAULT_TIMEOUT_MEME):
 
 def main():
     p = argparse.ArgumentParser(description="US Stock Scanner")
-    p.add_argument("--mode", default="scan", choices=["scan", "sector", "meme-scan"])
+    p.add_argument("--mode", default="scan", choices=["scan", "sector", "meme-scan", "premarket"])
     p.add_argument("--min-score", type=int, default=55)
     p.add_argument("--max-picks", type=int, default=10)
     p.add_argument("--top", type=int, default=10)
     p.add_argument("--timeout", type=int, default=None)
     p.add_argument("--output", default=None)
     a = p.parse_args()
-    timeout = a.timeout or (DEFAULT_TIMEOUT_SCAN if a.mode=="scan" else DEFAULT_TIMEOUT_SECTOR if a.mode=="sector" else DEFAULT_TIMEOUT_MEME)
+    timeout = a.timeout or (DEFAULT_TIMEOUT_SCAN if a.mode=="scan" else DEFAULT_TIMEOUT_SECTOR if a.mode=="sector" else DEFAULT_TIMEOUT_PREMARKET if a.mode=="premarket" else DEFAULT_TIMEOUT_MEME)
     r = {"generated_at": datetime.now().isoformat(), "mode": a.mode, "timeout_sec": timeout}
     t_start = time.time()
     if a.mode == "scan":
@@ -164,7 +159,9 @@ def main():
     elif a.mode == "sector":
         r["sector"] = run_sector(a.top, timeout)
     elif a.mode == "meme-scan":
-        r["meme"] = run_meme_scan(timeout)
+        r["meme"] = run_meme_scan(timeout) if LIB_OK else {"status": "error", "error": "library unavailable"}
+    elif a.mode == "premarket":
+        r["premarket"] = scan_premarket(top=a.top)
     r["total_elapsed_sec"] = round(time.time() - t_start, 1)
     out = json.dumps(r, ensure_ascii=False, indent=2, default=str)
     if a.output:
