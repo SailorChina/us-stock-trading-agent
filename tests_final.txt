@@ -1,6 +1,0 @@
-============================= test session starts =============================
-platform win32 -- Python 3.12.9, pytest-9.1.1, pluggy-1.6.0
-rootdir: C:\Users\sailor\Desktop\agent
-plugins: anyio-4.14.2, langsmith-0.10.17
-collected 112 items
-

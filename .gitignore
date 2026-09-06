@@ -1,25 +1,6 @@
-# Python
-__pycache__/
+*.txt
 *.pyc
-*.pyo
-*.pyd
-*.egg-info/
-.venv/
-venv/
-env/
-
-# Data & cache
-data/*.json
-!data/.gitkeep
-
-# Watchlist & journal (user data, not source)
-~/.us_stock_watchlist.json
-~/.us_stock_trade_journal.jsonl
-~/.futu_trade_audit.jsonl
-
-# Node
-node_modules/
-
-# OS
-.DS_Store
-Thumbs.db
+__pycache__/
+*.json
+data/
+_*
