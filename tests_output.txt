@@ -1,0 +1,173 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.9, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\sailor\AppData\Local\Programs\Python\Python312\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\sailor\Desktop\agent
+plugins: anyio-4.14.2, langsmith-0.10.17
+collecting ... collected 112 items
+
+tests/test_agent.py::test_normalize_symbol PASSED                        [  0%]
+tests/test_agent.py::test_normalize_symbol_invalid PASSED                [  1%]
+tests/test_agent.py::test_adjust_trade_plan_basic PASSED                 [  2%]
+tests/test_agent.py::test_adjust_trade_plan_no_atr PASSED                [  3%]
+tests/test_agent.py::test_adjust_trade_plan_none_tp PASSED               [  4%]
+tests/test_agent.py::test_adjust_trade_plan_zero_price PASSED            [  5%]
+tests/test_agent.py::test_run_quick_signal_returns_dict PASSED           [  6%]
+tests/test_agent.py::test_run_full_analysis_returns_dict PASSED          [  7%]
+tests/test_auto_analyzer.py::test_run_once_returns_list PASSED           [  8%]
+tests/test_auto_analyzer.py::test_print_summary_empty PASSED             [  8%]
+tests/test_auto_analyzer.py::test_print_summary_with_holds PASSED        [  9%]
+tests/test_auto_trader.py::test_place_order_dry_run PASSED               [ 10%]
+tests/test_auto_trader.py::test_log_trade PASSED                         [ 11%]
+tests/test_auto_trader.py::test_auto_trade_from_signal_returns_dict PASSED [ 12%]
+tests/test_backtest.py::test_ma_strategy_golden_cross PASSED             [ 13%]
+tests/test_backtest.py::test_ma_strategy_insufficient_data PASSED        [ 14%]
+tests/test_backtest.py::test_ma_strategy_no_cross PASSED                 [ 15%]
+tests/test_backtest_visualize.py::test_is_symbol PASSED                  [ 16%]
+tests/test_backtest_visualize.py::test_load_backtest_from_json PASSED    [ 16%]
+tests/test_backtest_visualize.py::test_compute_equity_curve PASSED       [ 17%]
+tests/test_backtest_visualize.py::test_compute_drawdown PASSED           [ 18%]
+tests/test_backtest_visualize.py::test_generate_html_output PASSED       [ 19%]
+tests/test_cache_util.py::test_retry_call_success PASSED                 [ 20%]
+tests/test_cache_util.py::test_retry_call_fallback PASSED                [ 21%]
+tests/test_cache_util.py::test_retry_call_exhausted PASSED               [ 22%]
+tests/test_cache_util.py::test_get_cached_miss_then_hit PASSED           [ 23%]
+tests/test_cache_util.py::test_get_cached_expired PASSED                 [ 24%]
+tests/test_cache_util.py::test_invalidate PASSED                         [ 25%]
+tests/test_config.py::test_load_settings PASSED                          [ 25%]
+tests/test_config.py::test_get_by_dotpath PASSED                         [ 26%]
+tests/test_daily_checklist.py::test_check_stock_returns_dict PASSED      [ 27%]
+tests/test_daily_checklist.py::test_check_stock_invalid PASSED           [ 28%]
+tests/test_daily_checklist.py::test_get_vix_level PASSED                 [ 29%]
+tests/test_daily_checklist.py::test_get_sector_heat PASSED               [ 30%]
+tests/test_daily_checklist.py::test_pre_market_check_no_watchlist PASSED [ 31%]
+tests/test_daily_checklist.py::test_pre_market_check_with_watchlist PASSED [ 32%]
+tests/test_journal.py::test_add_and_list PASSED                          [ 33%]
+tests/test_journal.py::test_list_analyses PASSED                         [ 33%]
+tests/test_logger.py::test_logger PASSED                                 [ 34%]
+tests/test_macro_calendar.py::test_list_macro_events PASSED              [ 35%]
+tests/test_macro_calendar.py::test_get_macro_snapshot PASSED             [ 36%]
+tests/test_market_sentiment.py::test_classify_vix_low PASSED             [ 37%]
+tests/test_market_sentiment.py::test_classify_vix_medium PASSED          [ 38%]
+tests/test_market_sentiment.py::test_classify_vix_high PASSED            [ 39%]
+tests/test_market_sentiment.py::test_classify_vix_extreme PASSED         [ 40%]
+tests/test_market_sentiment.py::test_classify_vix_zero PASSED            [ 41%]
+tests/test_market_sentiment.py::test_calc_change_basic PASSED            [ 41%]
+tests/test_market_sentiment.py::test_calc_change_negative PASSED         [ 42%]
+tests/test_market_sentiment.py::test_calc_change_no_prev PASSED          [ 43%]
+tests/test_market_sentiment.py::test_calc_change_none PASSED             [ 44%]
+tests/test_market_sentiment.py::test_get_vix_returns_dict PASSED         [ 45%]
+tests/test_market_sentiment.py::test_get_market_overview_returns_dict PASSED [ 46%]
+tests/test_news_sentiment.py::test_positive_sentiment PASSED             [ 47%]
+tests/test_news_sentiment.py::test_negative_sentiment PASSED             [ 48%]
+tests/test_news_sentiment.py::test_neutral_sentiment PASSED              [ 49%]
+tests/test_news_sentiment.py::test_sentiment_summary PASSED              [ 50%]
+tests/test_options_analysis.py::test_classify_iv_low PASSED              [ 50%]
+tests/test_options_analysis.py::test_classify_iv_normal PASSED           [ 51%]
+tests/test_options_analysis.py::test_classify_iv_high PASSED             [ 52%]
+tests/test_options_analysis.py::test_classify_iv_extreme PASSED          [ 53%]
+tests/test_options_analysis.py::test_classify_iv_none PASSED             [ 54%]
+tests/test_options_analysis.py::test_classify_pcr_bullish PASSED         [ 55%]
+tests/test_options_analysis.py::test_classify_pcr_neutral PASSED         [ 56%]
+tests/test_options_analysis.py::test_classify_pcr_cautious PASSED        [ 57%]
+tests/test_options_analysis.py::test_classify_pcr_bearish PASSED         [ 58%]
+tests/test_options_analysis.py::test_classify_pcr_none PASSED            [ 58%]
+tests/test_options_analysis.py::test_get_unusual_options PASSED          [ 59%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_basic PASSED   [ 60%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_profit PASSED  [ 61%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_loss PASSED    [ 62%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_broken_stop PASSED [ 63%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_high_conc PASSED [ 64%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_low_cash PASSED [ 65%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_empty PASSED   [ 66%]
+tests/test_portfolio_diagnose.py::test_diagnose_portfolio_dict_input PASSED [ 66%]
+tests/test_portfolio_diagnose.py::test_load_positions_from_json PASSED   [ 67%]
+tests/test_portfolio_diagnose.py::test_load_positions_from_string PASSED [ 68%]
+tests/test_premarket_scanner.py::test_premarket_scan PASSED              [ 69%]
+tests/test_premarket_scanner.py::test_afterhours_scan PASSED             [ 70%]
+tests/test_risk.py::test_atr_stop PASSED                                 [ 71%]
+tests/test_risk.py::test_risk_reward PASSED                              [ 72%]
+tests/test_risk.py::test_risk_reward_zero_risk PASSED                    [ 73%]
+tests/test_risk.py::test_risk_report PASSED                              [ 74%]
+tests/test_risk.py::test_dynamic_position_size PASSED                    [ 75%]
+tests/test_risk.py::test_portfolio_check PASSED                          [ 75%]
+tests/test_scan_stocks.py::test_yahoo_sector_map_has_keys PASSED         [ 76%]
+tests/test_scan_stocks.py::test_yahoo_sector_ranking_returns_list PASSED [ 77%]
+tests/test_scan_stocks.py::test_defaults PASSED                          [ 78%]
+tests/test_smart_money.py::test_smart_universe PASSED                    [ 79%]
+tests/test_smart_money.py::test_format_report PASSED                     [ 80%]
+tests/test_smart_money.py::test_format_report_empty PASSED               [ 81%]
+tests/test_smart_money.py::test_scan_smart_money_returns_list PASSED     [ 82%]
+tests/test_syntax.py::test_all_scripts_compile PASSED                    [ 83%]
+tests/test_tech_engine.py::test_calc_ma PASSED                           [ 83%]
+tests/test_tech_engine.py::test_calc_ema PASSED                          [ 84%]
+tests/test_tech_engine.py::test_calc_macd PASSED                         [ 85%]
+tests/test_tech_engine.py::test_calc_rsi PASSED                          [ 86%]
+tests/test_tech_engine.py::test_calc_rsi_uptrend PASSED                  [ 87%]
+tests/test_tech_engine.py::test_calc_kdj PASSED                          [ 88%]
+tests/test_tech_engine.py::test_calc_boll PASSED                         [ 89%]
+tests/test_tech_engine.py::test_calc_obv PASSED                          [ 90%]
+tests/test_tech_engine.py::test_calc_atr PASSED                          [ 91%]
+tests/test_tech_engine.py::test_format_tech_output_basic PASSED          [ 91%]
+tests/test_tech_engine.py::test_format_tech_output_error PASSED          [ 92%]
+tests/test_tech_engine.py::test_get_tech_summary_no_live PASSED          [ 93%]
+tests/test_tech_engine.py::test_smart_universe_constant PASSED           [ 94%]
+tests/test_tech_engine.py::test_calc_ma_short_df PASSED                  [ 95%]
+tests/test_tech_engine.py::test_calc_rsi_short_df PASSED                 [ 96%]
+tests/test_watchlist.py::test_add_and_list PASSED                        [ 97%]
+tests/test_watchlist.py::test_remove PASSED                              [ 98%]
+tests/test_watchlist.py::test_update_existing PASSED                     [ 99%]
+tests/test_watchlist.py::test_atomic_write PASSED                        [100%]
+
+============================== warnings summary ===============================
+tests/test_agent.py::test_run_quick_signal_returns_dict
+  C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\network_manager.py:185: DeprecationWarning: setDaemon() is deprecated, set the daemon attribute instead
+    self._thread.setDaemon(True)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================= 112 passed, 1 warning in 125.91s (0:02:05) ==================
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+ValueError: I/O operation on closed file.
+Call stack:
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1032, in _bootstrap
+    self._bootstrap_inner()
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1012, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\network_manager.py", line 298, in _loop
+    self.poll()
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\network_manager.py", line 251, in poll
+    work()
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\network_manager.py", line 346, in work
+    self._do_close(conn_id, reason, '', notify=is_notify)
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\network_manager.py", line 365, in _do_close
+    conn.handler.on_disconnect(conn_id, reason, msg)
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\open_context_base.py", line 524, in on_disconnect
+    logger.info2(FTLog.ONLY_CONSOLE, f'Disconnected: conn={self.conn_str()} reason={reason.name} msg={msg}')
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\ft_logger.py", line 161, in info2
+    self.console_logger.info(msg, *args, **kwargs)
+Message: '[open_context_base.py:524] on_disconnect: Disconnected: conn=0(7) reason=KeepAliveFail msg='
+Arguments: ()
+--- Logging error ---
+Traceback (most recent call last):
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+ValueError: I/O operation on closed file.
+Call stack:
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1032, in _bootstrap
+    self._bootstrap_inner()
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "C:\Users\sailor\AppData\Local\Programs\Python\Python312\Lib\threading.py", line 1433, in run
+    self.function(*self.args, **self.kwargs)
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\open_context_base.py", line 721, in _reconnect
+    ret = self._init_connect_sync()
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\open_context_base.py", line 408, in _init_connect_sync
+    logger.warning2(FTLog.BOTH_FILE_CONSOLE, f'init connect fail: conn={self.conn_str()} msg={msg} context={self}')
+  File "C:\Users\sailor\AppData\Roaming\Python\Python312\site-packages\futu\common\ft_logger.py", line 137, in warning2
+    self.console_logger.warning(msg, *args, **kwargs)
+Message: '[open_context_base.py:408] _init_connect_sync: init connect fail: conn=0(111) msg=Abnormal event timeout context=<futu.quote.open_quote_context.OpenQuoteContext object at 0x000001EF228A5130>'
+Arguments: ()

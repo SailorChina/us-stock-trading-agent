@@ -142,7 +142,7 @@ Examples:
   python agent.py checklist                  # Pre-market check
   python agent.py report NVDA                # Quick report
 """)
-    parser.add_argument("command", choices=["analyze", "signal", "watchlist", "checklist", "report", "smart_money"],
+    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot"],
                        help="Command to run")
     parser.add_argument("symbol", nargs="?", help="Stock symbol (e.g., NVDA, US.NVDA)")
     parser.add_argument("--timeframe", default="1d")
@@ -201,10 +201,36 @@ Examples:
             report["price"] = price.get("data", {})
         output = json.dumps(report, ensure_ascii=False, indent=2)
 
+    elif args.command == 'top':
+        n = int(args.symbol) if args.symbol else 10
+        result = scan_smart_money(top_n=n, min_score=20)
+    elif args.command == 'scan':
+        from tech_engine import get_price, generate_signal
+        syms = (args.symbol.split(',') if args.symbol else ['NVDA','TSLA','AAPL','MSFT','AMZN'])
+        results = []
+        for s in syms:
+            s = s.strip().upper()
+            if not s.startswith('US.'): s = 'US.' + s
+            p = get_price(s)
+            t = generate_signal(s, num_bars=60)
+            if t['status'] == 'ok':
+                results.append({'symbol': s, 'price': p.get('latest_price', 0) if p else 0,
+                    'rating': t['data']['rating'], 'score': t['data']['score'],
+                    'strength': t['data'].get('signal_strength', 50)})
+        result = {'generated_at': datetime.now().isoformat(), 'results': results}
     elif args.command == 'smart_money':
         result = scan_smart_money(top_n=15, min_score=20)
         output = json.dumps({'generated_at': datetime.now().isoformat(), 'results': result}, ensure_ascii=False, indent=2, default=str)
 
+    
+    elif args.command == 'hot':
+        try:
+            from tech_engine import scan_hot_list_futu
+            n = int(args.symbol) if args.symbol else 20
+            result = scan_hot_list_futu(top=n)
+            output = json.dumps({'generated_at': datetime.now().isoformat(), **result}, ensure_ascii=False, indent=2, default=str)
+        except Exception as e:
+            output = json.dumps({'error': str(e)}, ensure_ascii=False, indent=2)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output)

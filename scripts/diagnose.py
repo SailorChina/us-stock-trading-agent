@@ -32,16 +32,31 @@ def check_futu_opend():
         return {"reachable": False, "error": str(e)}
 
 def check_futu_basic():
-    """Check if Futu Basic subscription is active by testing a quote call"""
-    try:
-        from futu import OpenQuoteContext, RET_OK
-        with OpenQuoteContext() as ctx:
-            ret, data = ctx.get_stock_quote(["US.SPY"])
-            if ret == RET_OK and data is not None and len(data) > 0:
-                return {"basic_active": True, "price": float(data.iloc[0].get("last_price", 0))}
-            return {"basic_active": False, "ret": ret, "note": "Futu Basic 数据未订阅，部分接口不可用"}
-    except Exception as e:
-        return {"basic_active": False, "error": str(e)}
+    """Check if Futu Basic subscription is active by testing a quote call."""
+    import threading
+    result = {"basic_active": False, "note": "timeout"}
+
+    def _check():
+        try:
+            from futu import OpenQuoteContext, RET_OK
+            with OpenQuoteContext() as ctx:
+                ret, data = ctx.get_stock_quote(["US.SPY"])
+                if ret == RET_OK and data is not None and len(data) > 0:
+                    result["basic_active"] = True
+                    result["price"] = float(data.iloc[0].get("last_price", 0))
+                else:
+                    result["basic_active"] = False
+                    result["ret"] = ret
+        except Exception as e:
+            result["basic_active"] = False
+            result["error"] = str(e)
+
+    t = threading.Thread(target=_check, daemon=True)
+    t.start()
+    t.join(timeout=5)
+    if t.is_alive():
+        return {"basic_active": False, "error": "timeout after 5s"}
+    return result
 
 def check_news_api():
     try:

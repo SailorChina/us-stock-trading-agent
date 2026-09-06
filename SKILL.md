@@ -21,7 +21,7 @@ description: >
   止损止盈、仓位管理、板块轮动、美股推荐、NVDA分析、TSLA分析、
   盘前扫描、宏观日历、回测、Risk Manager
 metadata:
-  version: 2.0.0
+  version: 2.7.0
   author: agent-builder
   requires:
     - futuapi

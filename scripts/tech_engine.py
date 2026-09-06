@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, sys, os, time
+import json, sys, os, time, threading
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
@@ -7,6 +7,50 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 from cache_util import retry_call
+
+# Shared Futu connection pool - avoids 128 connection limit
+_futu_ctx_lock = threading.Lock()
+_futu_ctx = None
+
+def _get_futu_ctx():
+    global _futu_ctx
+    with _futu_ctx_lock:
+        if _futu_ctx is None:
+            from futu import OpenQuoteContext
+            _futu_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        return _futu_ctx
+
+def _close_futu_ctx():
+    global _futu_ctx
+    with _futu_ctx_lock:
+        if _futu_ctx is not None:
+            try:
+                _futu_ctx.close()
+            except Exception:
+                pass
+            _futu_ctx = None
+
+
+
+def _with_futu_context(func, *args, timeout=3):
+    result = [None]
+    error = [None]
+    def _run():
+        try:
+            result[0] = func(*args)
+        except Exception as e:
+            error[0] = e
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        print(chr(91)+chr(116)+chr(101)+chr(99)+chr(104)+chr(104)+chr(95)+chr(101)+chr(110)+chr(103)+chr(105)+chr(110)+chr(101)+chr(93)+chr(32)+chr(116)+chr(105)+chr(109)+chr(101)+chr(111)+chr(117)+chr(116), file=sys.stderr)
+        return None
+    if error[0]:
+        raise error[0]
+    return result[0]
+
+
 
 
 def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
@@ -16,7 +60,9 @@ def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
                   "15m": KLType.K_15M, "30m": KLType.K_30M, "60m": KLType.K_60M,
                   "1d": KLType.K_DAY, "1w": KLType.K_WEEK, "1M": KLType.K_MON}
         kl_type = kl_map.get(ktype, KLType.K_DAY)
-        ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        if ctx is None:
+            return None
         try:
             page_size = min(num, 1000)
             ret, df, next_key = ctx.request_history_kline(symbol, start=start_date, end=end_date,
@@ -50,7 +96,9 @@ def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
 def get_price(symbol):
     try:
         from futu import OpenQuoteContext
-        ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        if ctx is None:
+            return None
         try:
             ret, df = ctx.get_market_snapshot([symbol])
             if ret != 0 or df is None or len(df) == 0:
@@ -78,7 +126,9 @@ def get_price(symbol):
 def get_premarket_hot(top=20):
     try:
         from futu import OpenQuoteContext
-        ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        if ctx is None:
+            return []
         try:
             ret, result = ctx.get_us_pre_market_rank()
             if ret != 0 or result is None:
@@ -106,7 +156,9 @@ def get_premarket_hot(top=20):
 def get_hot_list(market="US", top=20):
     try:
         from futu import OpenQuoteContext
-        ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        if ctx is None:
+            return []
         try:
             ret, result = ctx.get_hot_list([market], count=top)
             if ret != 0 or result is None:
@@ -223,6 +275,78 @@ def calc_obv(df):
     return float(df["OBV"].iloc[-1]) if len(obv) > 0 else 0.0
 
 
+
+def calc_aroon(df, period=25):
+    """Aroon indicator: measures trend strength and direction."""
+    close = df["close"]
+    hh = close.rolling(period + 1).max()
+    lh = close.rolling(period + 1).min()
+    hh_idx = (close == hh).astype(int).diff().eq(1).cumsum()
+    lh_idx = (close == lh).astype(int).diff().eq(1).cumsum()
+    aroon_up = 100 * (1 - hh_idx / period)
+    aroon_down = 100 * (1 - lh_idx / period)
+    return {
+        "aroon_up": round(float(aroon_up.iloc[-1]), 1),
+        "aroon_down": round(float(aroon_down.iloc[-1]), 1),
+        "aroon_diff": round(float(aroon_up.iloc[-1] - aroon_down.iloc[-1]), 1),
+    }
+
+
+def calc_adx(df, period=14):
+    """ADX indicator: measures trend strength."""
+    high = df["high"].values
+    low = df["low"].values
+    close = df["close"].values
+    tr = np.zeros(len(close))
+    for i in range(1, len(close)):
+        tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
+    atr = pd.Series(tr).rolling(period).mean()
+    up = np.diff(high, prepend=high[0])
+    down = -np.diff(low, prepend=low[0])
+    plus_dm = np.where((up > down) & (up > 0), up, 0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0)
+    plus_di = 100 * pd.Series(plus_dm).rolling(period).mean() / atr
+    minus_di = 100 * pd.Series(minus_dm).rolling(period).mean() / atr
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
+    adx = dx.rolling(period).mean()
+    return {
+        "adx": round(float(adx.iloc[-1]), 1),
+        "plus_di": round(float(plus_di.iloc[-1]), 1),
+        "minus_di": round(float(minus_di.iloc[-1]), 1),
+    }
+
+
+def calc_vwap(df):
+    """VWAP: Volume Weighted Average Price."""
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    vol = df["volume"].astype(float)
+    cum_vol = vol.cumsum().replace(0, 1)
+    return round(float((typical * vol).cumsum().iloc[-1] / cum_vol.iloc[-1]), 2)
+
+
+def calc_signal_strength(df, atr, latest, ma20):
+    """Calculate signal strength score (0-100) based on multiple factors."""
+    score = 50  # baseline
+    # Price vs MA20
+    if ma20 > 0:
+        dist = (latest - ma20) / ma20 * 100
+        if dist > 5: score += 10
+        elif dist > 2: score += 5
+        elif dist < -5: score -= 10
+        elif dist < -2: score -= 5
+    # ATR relative to price
+    if latest > 0:
+        atr_pct = atr / latest * 100
+        if atr_pct > 5: score += 5
+        elif atr_pct < 1: score -= 5
+    # Volume trend
+    if len(df) >= 20:
+        vol_avg = df["volume"].tail(20).mean()
+        vol_latest = df["volume"].iloc[-1]
+        if vol_avg > 0 and vol_latest > vol_avg * 1.5: score += 10
+        elif vol_avg > 0 and vol_latest < vol_avg * 0.5: score -= 5
+    return max(0, min(100, score))
+
 def generate_signal(symbol, timeframe="1d", num_bars=60):
     df = fetch_kline(symbol, ktype=timeframe, num=num_bars)
     if df is None or len(df) < 20:
@@ -236,6 +360,9 @@ def generate_signal(symbol, timeframe="1d", num_bars=60):
     kdj = calc_kdj(df)
     boll = calc_boll(df)
     atr = calc_atr(df)
+    aroon = calc_aroon(df)
+    adx = calc_adx(df)
+    vwap = calc_vwap(df)
     obv = calc_obv(df)
     dims = {}
     # 1. Trend - 20pts
@@ -323,8 +450,10 @@ def generate_signal(symbol, timeframe="1d", num_bars=60):
             "data": {"rating": rating, "score": total_score, "price": price,
                      "dimensions": dims,
                      "indicators": {"ma": ma, "ema": ema, "macd": macd, "rsi": round(rsi, 1),
-                                    "kdj": kdj, "boll": boll, "atr": round(atr, 2)},
+                                    "kdj": kdj, "boll": boll, "atr": round(atr, 2),
+                                    "aroon": aroon, "adx": adx, "vwap": vwap},
                      "signals": signals,
+                     "signal_strength": calc_signal_strength(df, atr, latest, ma20),
                      "trade_plan": {"entry_zone": entry, "stop_loss": stop, "target_1": tp1, "target_2": tp2,
                                     "risk_reward": rr, "atr": round(atr, 2),
                                     "position_size_pct": round(100 / max(1, rr), 1),
@@ -366,6 +495,14 @@ def format_tech_output(data):
     ind = d["indicators"]
     lines.append("  Key Indicators:")
     lines.append(f"    MA5={ind['ma']['MA5']:.1f} MA10={ind['ma']['MA10']:.1f} MA20={ind['ma']['MA20']:.1f} MA60={ind['ma']['MA60']:.1f}")
+    if 'aroon' in ind:
+        ar = ind['aroon']
+        lines.append(f"    Aroon: Up={ar['aroon_up']:.0f} Down={ar['aroon_down']:.0f} Diff={ar['aroon_diff']:.0f}")
+    if 'adx' in ind:
+        ad = ind['adx']
+        lines.append(f"    ADX: {ad['adx']:.1f} +DI={ad['plus_di']:.1f} -DI={ad['minus_di']:.1f}")
+    if 'vwap' in ind:
+        lines.append(f"    VWAP: ${ind['vwap']:.2f}")
     lines.append(f"    MACD: DIF={ind['macd']['dif']:.3f} DEA={ind['macd']['dea']:.3f} Hist={ind['macd']['hist']:.3f} ({ind['macd']['signal']})")
     lines.append(f"    RSI(14): {ind['rsi']:.1f}")
     lines.append(f"    KDJ: K={ind['kdj']['k']:.1f} D={ind['kdj']['d']:.1f} J={ind['kdj']['j']:.1f}")
@@ -380,7 +517,8 @@ def format_tech_output(data):
     lines.append("  Trade Plan:")
     lines.append(f"    Entry: ${tp['entry_zone']}  Stop: ${tp['stop_loss']}")
     lines.append(f"    Target1: ${tp['target_1']}  Target2: ${tp['target_2']}")
-    lines.append(f"    R:R = {tp['risk_reward']:.1f}:1  Position: {tp['position_size_pct']:.1f}%")
+    strength = d.get('signal_strength', 50)
+    lines.append(f"    R:R = {tp['risk_reward']:.1f}:1  Position: {tp['position_size_pct']:.1f}%  Strength: {strength}/100")
     lines.append("")
     lines.append("=" * 60)
     return "\n".join(lines)
@@ -391,6 +529,56 @@ def scan_premarket(top=20):
     return {"status": "ok", "source": "futu_premarket", "count": len(stocks), "data": stocks}
 
 
+
+
+def _futu_available_quick(timeout=2):
+    import socket
+    try:
+        socket.create_connection(('127.0.0.1', 11111), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def get_hot_list_futu(top=30):
+    if not _futu_available_quick():
+        return []
+    try:
+        from futu import OpenQuoteContext
+        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        if ctx is None:
+            return []
+        try:
+            ret, result = ctx.get_hot_list(['US'], count=top)
+            if ret != 0 or result is None:
+                return []
+            if isinstance(result, tuple):
+                df = result[1] if len(result) > 1 else result[0]
+            else:
+                df = result
+            if df is None or len(df) == 0:
+                return []
+            rows = []
+            for _, r in df.head(top).iterrows():
+                rows.append({
+                    'code': str(r.get('code', '')),
+                    'name': str(r.get('name', '')),
+                    'last_price': float(r.get('last_price', 0)),
+                    'change_pct': float(r.get('change_ratio', 0)),
+                    'volume': int(r.get('volume', 0)),
+                    'hot_score': float(r.get('hot_score', 0)),
+                })
+            return rows
+        finally:
+            ctx.close()
+    except Exception as e:
+        print(f'[tech_engine] get_hot_list_futu error: {e}', file=sys.stderr)
+        return []
+
+
+def scan_hot_list_futu(top=30):
+    stocks = get_hot_list_futu(top)
+    return {'status': 'ok' if stocks else 'empty', 'source': 'futu_hot_list', 'count': len(stocks), 'data': stocks}
 def scan_hot_list(market="US", top=20):
     stocks = get_hot_list(market, top)
     return {"status": "ok" if stocks else "empty", "source": "futu_hot_list", "count": len(stocks), "data": stocks}

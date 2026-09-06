@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smart Money Screener - Following the institutions, efficient Futu API usage"""
-import json, sys, os, time
+import json, sys, os, time, socket, threading
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -9,7 +9,16 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 from tech_engine import fetch_kline, get_price, generate_signal
 
-# Focused universe - top 30 most liquid US stocks
+
+# Quick Futu availability check
+def _futu_available(timeout=2):
+    try:
+        socket.create_connection(("127.0.0.1", 11111), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 SMART_UNIVERSE = [
     "US.SPY", "US.QQQ", "US.IWM",
     "US.AAPL", "US.MSFT", "US.NVDA", "US.TSLA", "US.AMZN",
@@ -17,17 +26,28 @@ SMART_UNIVERSE = [
     "US.INTC", "US.UBER", "US.LLY", "US.WMT", "US.JNJ",
     "US.PFE", "US.BAC", "US.JPM", "US.GS", "US.MS",
     "US.XOM", "US.COP", "US.PD", "US.ABBV", "US.TMO",
+    "US.BRK.B", "US.V", "US.JCI", "US.HON", "US.UNH",
+    "US.BA", "US.LMT", "US.RTI", "US.CAT", "US.MMM",
+    "US.PYPL", "US.ABN", "US.EL", "US.KO", "US.PEP",
+    "US.MCD", "US.NKE", "US.DIS", "US.HD", "US.LOW",
+    "US.DIA", "US.VTI", "US.MU", "US.LRCX",
+    "US.MA", "US.BMY", "US.AMGN", "US.REGN", "US.TGT",
+    "US.SBUX", "US.ABBV", "US.GS",
 ]
 
 def scan_smart_money(top_n=15, min_score=20):
+    if not _futu_available():
+        print("Smart Money Scanner: Futu OpenD not available, returning empty", file=sys.stderr)
+        return []
+
     from futu import OpenQuoteContext, RET_OK
-    
+
     print(f"Smart Money Scanner {datetime.now().strftime('%Y-%m-%d %H:%M')}", file=sys.stderr)
     print(f"Scanning {len(SMART_UNIVERSE)} stocks...", file=sys.stderr)
-    
+
     results = []
     ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
-    
+
     try:
         # 1. Fetch short selling data once
         short_map = {}
@@ -41,7 +61,7 @@ def scan_smart_money(top_n=15, min_score=20):
                         "short_number": int(r.get("short_number", 0)),
                     }
         print(f"  Short data: {len(short_map)} stocks", file=sys.stderr)
-        
+
         # 2. Fetch capital flow for each stock (batch with delays)
         flow_map = {}
         for sym in SMART_UNIVERSE:
@@ -62,19 +82,19 @@ def scan_smart_money(top_n=15, min_score=20):
                             ts = daily["smart"].sum()
                             tr = daily["retail"].sum()
                             dom = ts / (abs(ts) + abs(tr) + 1)
-                            cons = sum(1 for _, row in daily.iterrows() 
-                                      if row["smart"] > 0) 
+                            cons = sum(1 for _, row in daily.iterrows()
+                                      if row["smart"] > 0)
                             flow_map[sym] = {"dom": dom, "cons": cons, "ts": ts, "tr": tr}
                 time.sleep(0.1)
             except Exception as e:
                 print(f"  Flow error {sym}: {e}", file=sys.stderr)
         print(f"  Flow data: {len(flow_map)} stocks", file=sys.stderr)
-        
+
         # 3. Score each stock
         for sym in SMART_UNIVERSE:
             score = 0
             signals = []
-            
+
             # Capital flow (0-30)
             fl = flow_map.get(sym, {})
             fl_score = 0
@@ -85,14 +105,14 @@ def scan_smart_money(top_n=15, min_score=20):
                 elif fl["cons"] >= 1: fl_score += 5
                 if abs(fl["ts"]) + abs(fl["tr"]) > 1e6: fl_score += 5
             fl_score = min(30, fl_score)
-            
+
             # Short squeeze (0-20)
             sq = short_map.get(sym, {})
             sq_score = 0
             if sq.get("short_ratio", 0) > 5:
                 sq_score = min(20, int(sq["short_ratio"] * 1.5))
                 signals.append(f"Short{sq['short_ratio']:.0f}%")
-            
+
             # Technical (0-25)
             tech = generate_signal(sym, num_bars=60)
             tc = 0
@@ -101,14 +121,14 @@ def scan_smart_money(top_n=15, min_score=20):
                 rs = {"Buy": 25, "Overweight": 18, "Hold": 10, "Underweight": 4, "Sell": 0}
                 tc = rs.get(d["rating"], 5)
                 if d["score"] >= 60: tc = min(25, tc + 5)
-            
+
             # Momentum (0-15)
             pr = get_price(sym)
             mc = 0
             if pr:
                 chg = pr.get("change_pct", 0)
                 mc = 15 if chg > 3 else 10 if chg > 1 else 5 if chg > 0 else 0
-            
+
             total = fl_score + sq_score + tc + mc
             if total >= min_score:
                 results.append({
@@ -118,13 +138,60 @@ def scan_smart_money(top_n=15, min_score=20):
                     "signals": signals[:4], "price": pr, "tech": tech,
                 })
             time.sleep(0.05)
-    
+
     finally:
         ctx.close()
-    
+
     results.sort(key=lambda x: x["total_score"], reverse=True)
     return results[:top_n]
 
+
+
+
+def detect_volume_surge(symbol, num_bars=20):
+    from tech_engine import fetch_kline
+    df = fetch_kline(symbol, ktype="1d", num=num_bars + 10)
+    if df is None or len(df) < 20:
+        return None
+    vol_avg = df["volume"].tail(20).mean()
+    vol_latest = df["volume"].iloc[-1]
+    if vol_avg > 0:
+        ratio = vol_latest / vol_avg
+        if ratio > 2.0:
+            return {"surge": True, "ratio": round(ratio, 2)}
+        elif ratio > 1.5:
+            return {"surge": True, "ratio": round(ratio, 2)}
+    return None
+
+
+def get_top_brokers(symbol):
+    from futu import OpenQuoteContext, RET_OK
+    _r = [None]; _e = [None]
+    def _run():
+        try:
+            ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            ret, result = ctx.get_top_ten_buy_sell_brokers(symbol)
+            if ret == RET_OK and result is not None:
+                df = result[1] if isinstance(result, tuple) else result
+                if df is not None and len(df) > 0:
+                    buys = df[df["buy_sell"] == "buy"].head(3)
+                    sells = df[df["buy_sell"] == "sell"].head(3)
+                    _r[0] = {
+                        "top_buyers": buys["broker"].head(3).tolist() if len(buys) > 0 else [],
+                        "top_sellers": sells["broker"].head(3).tolist() if len(sells) > 0 else [],
+                        "net_flow": float(df["net_flow"].sum()) if "net_flow" in df.columns else 0,
+                    }
+
+        except Exception as ex:
+            _e[0] = ex
+    _t = threading.Thread(target=_run, daemon=True)
+    _t.start()
+    _t.join(timeout=3)
+    if _t.is_alive():
+        return None
+    if _e[0]:
+        return None
+    return _r[0]
 
 def format_report(results):
     lines = []

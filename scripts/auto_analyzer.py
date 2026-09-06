@@ -58,6 +58,7 @@ def run_single_analysis(symbol, timeframe="1d"):
         })
     except Exception as e:
         result["error"] = str(e)
+        result["action"] = "ERROR"
     return result
 
 

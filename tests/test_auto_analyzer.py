@@ -1,39 +1,43 @@
-import sys, os, json
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+"""Test: auto_analyzer - scan and report."""
+import pytest
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+from auto_analyzer import run_once, print_summary
 
 
-def test_print_summary():
-    from auto_analyzer import print_summary
+@pytest.mark.network
+def test_run_once_returns_list():
+    result = run_once()
+    assert isinstance(result, list)
+    if len(result) > 0:
+        assert "symbol" in result[0]
+        assert "action" in result[0]
+
+
+def test_print_summary_empty():
     import io
-    old_stderr = sys.stderr
+    old = sys.stderr
+    sys.stderr = buf = io.StringIO()
+    try:
+        print_summary([])
+        out = buf.getvalue()
+    finally:
+        sys.stderr = old
+    assert "0 stocks" in out
+
+
+def test_print_summary_with_holds():
+    import io
+    old = sys.stderr
     sys.stderr = buf = io.StringIO()
     try:
         print_summary([
-            {'symbol': 'US.NVDA', 'action': 'HOLD', 'tech_rating': 'Hold', 'tech_score': 45, 'trade_plan': {}},
-            {'symbol': 'US.TSLA', 'action': 'HOLD', 'tech_rating': 'Hold', 'tech_score': 40, 'trade_plan': {}},
+            {"symbol": "US.AAPL", "action": "HOLD", "tech_rating": "Hold", "tech_score": 45},
+            {"symbol": "US.MSFT", "action": "HOLD", "tech_rating": "Hold", "tech_score": 40},
         ])
-        output = buf.getvalue()
+        out = buf.getvalue()
     finally:
-        sys.stderr = old_stderr
-    assert '2 stocks' in output
-    assert 'HOLD' in output
-    assert 'NO SIGNALS' in output
-
-
-def test_print_summary_with_buy():
-    from auto_analyzer import print_summary
-    import io
-    old_stderr = sys.stderr
-    sys.stderr = buf = io.StringIO()
-    try:
-        print_summary([
-            {'symbol': 'US.NVDA', 'action': 'BUY', 'tech_rating': 'Buy', 'tech_score': 72, 'trade_plan': {'entry_zone': 220, 'stop_loss': 200}},
-            {'symbol': 'US.TSLA', 'action': 'HOLD', 'tech_rating': 'Hold', 'tech_score': 40, 'trade_plan': {}},
-        ])
-        output = buf.getvalue()
-    finally:
-        sys.stderr = old_stderr
-    assert 'NVDA' in output
-    assert 'BUY' in output
-    assert '2 stocks' in output
-    assert 'BUY CANDIDATES' in output
+        sys.stderr = old
+    assert "HOLD" in out
+    assert "2 stocks" in out

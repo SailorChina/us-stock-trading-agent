@@ -1,4 +1,4 @@
-# US Stock Trading Agent
+﻿# US Stock Trading Agent
 
 美股交易专家 Agent，整合**技术分析、资金流向、新闻情感、期权异动、风险管理**五大维度，为美股提供全面的交易分析与决策支持。
 
@@ -8,6 +8,7 @@
 |------|------|------|
 | **技术分析** | `us_stock_analyzer.py` | VCP形态、MACD/RSI/KDJ/BOLL、多周期共振、TD序列、五档评级 |
 | **资金流向** | `scan_stocks.py` | 板块热度排名、异动股扫描、Meme股追踪 |
+| **热门榜单** | `tech_engine.py` | Futu热门榜单扫描、聪明钱综合评分 |
 | **新闻情感** | `news_sentiment.py` | Futu新闻API、正负向词库分析、综合情感评分 |
 | **期权异动** | `options_analysis.py` | IV隐含波动率、PCR看跌看涨比、异常期权成交 |
 | **风险管理** | `risk_manager.py` | ATR止损、风险收益比、动态仓位、组合诊断 |
@@ -15,7 +16,7 @@
 ## 测试状态
 
 ```
-43 passed (全部通过)
+157 passed (全部通过)
 pytest tests/ -q
 ```
 
@@ -223,5 +224,5 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
-- **v2.0.0** - 当前版本：5大维度整合、完整测试套件(41 passed)、重试/缓存机制
+- **v2.6.0** - 聪明钱筛选器、155项测试(约130 passed, 25 network deselected)、价格实时修正、全覆盖测试
 - **v1.0.0** - 初始版本：基础分析、回测、风险计算

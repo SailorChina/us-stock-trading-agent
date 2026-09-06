@@ -28,6 +28,9 @@ def _yahoo_accessible():
     return False
 
 
+
+@pytest.mark.network
+@pytest.mark.timeout(30)
 def test_list_macro_events():
     from macro_calendar import list_macro_events
     events = list_macro_events()
@@ -38,6 +41,8 @@ def test_list_macro_events():
     assert "CPI" in codes
 
 
+@pytest.mark.network
+@pytest.mark.timeout(30)
 def test_get_macro_snapshot():
     if not _yahoo_accessible():
         pytest.skip("Yahoo Finance unavailable")

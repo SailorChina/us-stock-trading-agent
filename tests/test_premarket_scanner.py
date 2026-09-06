@@ -28,6 +28,7 @@ def _yahoo_accessible():
     return False
 
 
+@pytest.mark.network
 def test_premarket_scan():
     if not _yahoo_accessible():
         pytest.skip("Yahoo Finance unavailable")
@@ -38,6 +39,7 @@ def test_premarket_scan():
     assert result["elapsed_sec"] >= 0
 
 
+@pytest.mark.network
 def test_afterhours_scan():
     from premarket_scanner import run_afterhours_scan
     result = run_afterhours_scan(top=3)
