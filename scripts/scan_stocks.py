@@ -98,17 +98,36 @@ def run_sector(top=10, timeout=DEFAULT_TIMEOUT_SECTOR):
         elapsed = time.time() - t0
         return {"status": "error", "elapsed_sec": round(elapsed, 1), "error": str(e)}
 
+def _score_stock(symbol):
+    from tech_engine import get_price, generate_signal
+    try:
+        price = get_price(symbol)
+        if price is None or price.get("latest_price", 0) <= 0:
+            return None
+        sig = generate_signal(symbol, "1d", 60)
+        if sig and sig.get("score") is not None:
+            return {"symbol": symbol, "price": price["latest_price"],
+                    "score": sig["score"], "rating": sig.get("rating", "Hold")}
+        return None
+    except Exception:
+        return None
+
 def run_scan(min_score=55, max_picks=10, timeout=DEFAULT_TIMEOUT_SCAN):
     t0 = time.time()
-    config = ScanConfig(min_score=float(min_score), max_per_market=max_picks)
-    try:
-        result = scan_parallel(config=config, output_json=True)
-        elapsed = time.time() - t0
-        status = "timeout" if elapsed > timeout else "ok"
-        return {"status": status, "elapsed_sec": round(elapsed, 1), "data": result}
-    except Exception as e:
-        elapsed = time.time() - t0
-        return {"status": "error", "elapsed_sec": round(elapsed, 1), "error": str(e)}
+    watchlist = ["US.AAPL", "US.MSFT", "US.NVDA", "US.AMZN", "US.META",
+                 "US.TSLA", "US.GOOG", "US.JPM", "US.V", "US.WMT",
+                 "US.DIS", "US.NFLX", "US.BA", "US.INTC", "US.PFE",
+                 "US.UNH", "US.CSCO", "US.ADP", "US.ROKU", "US.PEPE"]
+    results = []
+    for sym in watchlist:
+        r = _score_stock(sym)
+        if r and r.get("score", 0) >= min_score:
+            results.append(r)
+        if len(results) >= max_picks:
+            break
+    elapsed = time.time() - t0
+    status = "timeout" if elapsed > timeout else "ok"
+    return {"status": status, "elapsed_sec": round(elapsed, 1), "data": results[:max_picks]}
 
 def run_meme_scan(timeout=DEFAULT_TIMEOUT_MEME):
     t0 = time.time()

@@ -14,13 +14,8 @@ def _futu_connect(fn,*args,timeout=3):
     def _run():
         try:
             from futu import OpenQuoteContext,RET_OK
-            ctx=OpenQuoteContext();ctx.open();f2=getattr(ctx,fn);r[0]=f2(*args)
+            ctx=OpenQuoteContext();ctx.open();f2=getattr(ctx,fn);r[0]=f2(*args);ctx.close()
         except Exception as ex:e[0]=ex
-        finally:
-            try:
-                ctx.close()
-            except Exception:
-                pass
     t=threading.Thread(target=_run,daemon=True);t.start();t.join(timeout=timeout)
     if t.is_alive():return None
     if e[0]:return None

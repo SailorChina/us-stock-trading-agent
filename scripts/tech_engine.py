@@ -86,8 +86,7 @@ def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
             result = result.sort_values("time_key").reset_index(drop=True)
             result = result.tail(num).reset_index(drop=True)
             return result
-        finally:
-            ctx.close()
+        except Exception: pass
     except Exception as e:
         print(f"[tech_engine] fetch_kline error for {symbol}: {e}", file=sys.stderr)
         return None
@@ -116,8 +115,7 @@ def get_price(symbol):
                     "change_pct": round(chg, 2), "volume": int(vol),
                     "update_time": str(row.get("update_time", ""))[:19],
                     "pe_ratio": float(row.get("pe_ratio", 0)) if pd.notna(row.get("pe_ratio")) else None}
-        finally:
-            ctx.close()
+        except Exception: pass
     except Exception as e:
         print(f"[tech_engine] get_price error: {e}", file=sys.stderr)
         return None
@@ -146,8 +144,7 @@ def get_premarket_hot(top=20):
                              "change_pct": float(r.get("change_ratio", 0)),
                              "volume": int(r.get("volume", 0))})
             return rows
-        finally:
-            ctx.close()
+        except Exception: pass
     except Exception as e:
         print(f"[tech_engine] get_premarket_hot error: {e}", file=sys.stderr)
         return []
@@ -155,12 +152,13 @@ def get_premarket_hot(top=20):
 
 def get_hot_list(market="US", top=20):
     try:
-        from futu import OpenQuoteContext
+        from futu import OpenQuoteContext, Market
         ctx = _with_futu_context(_get_futu_ctx, timeout=3)
         if ctx is None:
             return []
         try:
-            ret, result = ctx.get_hot_list([market], count=top)
+            mkt = Market.US if market.upper() == 'US' else Market.HK
+            ret, result = ctx.get_hot_list(market=mkt, count=top)
             if ret != 0 or result is None:
                 return []
             if isinstance(result, tuple):
@@ -171,14 +169,13 @@ def get_hot_list(market="US", top=20):
                 return []
             rows = []
             for _, r in df.head(top).iterrows():
-                rows.append({"code": str(r.get("code", "")), "name": str(r.get("name", "")),
+                rows.append({"code": str(r.get("security", "")), "name": str(r.get("name", "")),
                              "last_price": float(r.get("last_price", 0)),
                              "change_pct": float(r.get("change_ratio", 0)),
                              "volume": int(r.get("volume", 0)),
                              "hot_score": float(r.get("hot_score", 0))})
             return rows
-        finally:
-            ctx.close()
+        except Exception: pass
     except Exception as e:
         print(f"[tech_engine] get_hot_list error: {e}", file=sys.stderr)
         return []
@@ -581,8 +578,7 @@ def get_hot_list_futu(top=30):
                     'hot_score': float(r.get('hot_score', 0)),
                 })
             return rows
-        finally:
-            ctx.close()
+        except Exception: pass
     except Exception as e:
         print(f'[tech_engine] get_hot_list_futu error: {e}', file=sys.stderr)
         return []

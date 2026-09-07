@@ -19,9 +19,9 @@ description: >
   触发关键词：美股分析、股票分析、买卖信号、选股、交易计划、
   技术分析、资金流向、期权异动、情绪分析、持仓诊断、
   止损止盈、仓位管理、板块轮动、美股推荐、NVDA分析、TSLA分析、
-  盘前扫描、宏观日历、回测、Risk Manager
+  盘前扫描、宏观日历、回测、Risk Manager、聪明钱、热门榜单
 metadata:
-  version: 2.7.0
+  version: 2.8.0
   author: agent-builder
   requires:
     - futuapi
