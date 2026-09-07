@@ -184,6 +184,11 @@ def get_top_brokers(symbol):
 
         except Exception as ex:
             _e[0] = ex
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
     _t = threading.Thread(target=_run, daemon=True)
     _t.start()
     _t.join(timeout=3)
