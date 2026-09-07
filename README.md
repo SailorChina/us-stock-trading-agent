@@ -22,7 +22,7 @@
 ## 测试状态
 
 ```
-180 passed (全部通过)
+195 passed (全部通过)
 pytest tests/ -q
 ```
 
@@ -139,6 +139,14 @@ python scripts/auto_analyzer.py --daemon --interval 1
 # 环境诊断
 python scripts/diagnose.py
 
+# ML预测（价格方向）
+python scripts/agent.py ml-predict US.NVDA
+python scripts/ml_predictor.py --symbol US.NVDA --mode predict
+
+# ML回测（Walk-forward验证）
+python scripts/agent.py ml-backtest US.NVDA
+python scripts/ml_predictor.py --symbol US.NVDA --mode backtest
+
 # 智能筛选（聪明钱）
 python scripts/smart_money_screener.py --mode quick
 ```
@@ -181,6 +189,8 @@ agent/
 │   ├── enhanced_indicators.py  # 增强指标（CCI/RVI/StochRSI/WR/OBV背离）
 │   ├── candlestick_patterns.py # K线形态识别（9种经典形态）
 │   ├── earnings_analyzer.py   # 财报分析（PE/EPS/营收/分析师目标）
+│   ├── ml_predictor.py        # ML价格方向预测（RF/GBM）
+│   ├── ml_features.py         # 特征工程（28维技术指标）
 │   ├── decision_engine.py     # 六因子综合决策引擎
 │   ├── smart_money_screener.py # 聪明钱筛选器
 │   ├── market_sentiment.py    # 市场情绪（VIX/指数/M7）
@@ -267,7 +277,7 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
-- **v2.9.0** - 新增K线形态识别、增强指标(CCI/RVI/StochRSI/WR/OBV背离)、财报分析、六因子决策引擎、180测试全部通过
+- **v3.0.0** - 新增K线形态识别、增强指标(CCI/RVI/StochRSI/WR/OBV背离)、财报分析、六因子决策引擎、180测试全部通过
 - **v2.8.0** - 修复6个深度BUG：get_price连接池泄漏、get_hot_list Market枚举、scan_stocks ScanConfig未定义、options IV/PCR错误API、market_sentiment连接泄漏
 - **v2.7.0** - 聪明钱筛选器、155项测试、价格实时修正
 - **v1.0.0** - 初始版本：基础分析、回测、风险计算

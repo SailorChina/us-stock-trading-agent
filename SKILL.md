@@ -24,9 +24,9 @@ description: >
   技术分析、资金流向、期权异动、情绪分析、持仓诊断、
   止损止盈、仓位管理、板块轮动、美股推荐、NVDA分析、TSLA分析、
   盘前扫描、宏观日历、回测、Risk Manager、聪明钱、热门榜单、
-  K线形态、MACD金叉、RSI超买、OBV背离、财报分析、决策引擎
+  K线形态、MACD金叉、RSI超买、OBV背离、财报分析、决策引擎、ML预测、Walk-forward回测
 metadata:
-  version: 2.9.0
+  version: 3.0.0
   author: agent-builder
   requires:
     - futuapi

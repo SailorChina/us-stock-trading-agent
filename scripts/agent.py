@@ -146,7 +146,7 @@ Examples:
   python agent.py checklist                  # Pre-market check
   python agent.py report NVDA                # Quick report
 """)
-    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot", "divergence", "candlestick", "earnings", "decision"],
+    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot", "divergence", "candlestick", "earnings", "decision", "ml-predict", "ml-backtest"],
                        help="Command to run")
     parser.add_argument("symbol", nargs="?", help="Stock symbol (e.g., NVDA, US.NVDA)")
     parser.add_argument("--timeframe", default="1d")
