@@ -235,6 +235,52 @@ Examples:
             output = json.dumps({'generated_at': datetime.now().isoformat(), **result}, ensure_ascii=False, indent=2, default=str)
         except Exception as e:
             output = json.dumps({'error': str(e)}, ensure_ascii=False, indent=2)
+    elif args.command == "candlestick":
+        if not args.symbol:
+            print("需要 --symbol", file=sys.stderr); sys.exit(1)
+        symbol = normalize_symbol(args.symbol)
+        from candlestick_patterns import get_latest_patterns
+        from tech_engine import fetch_kline
+        df = fetch_kline(symbol, ktype="1d", num=60)
+        patterns = get_latest_patterns(df, n_patterns=5)
+        output = json.dumps({"symbol": symbol, "patterns": patterns, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
+    elif args.command == "divergence":
+        if not args.symbol:
+            print("需要 --symbol", file=sys.stderr); sys.exit(1)
+        symbol = normalize_symbol(args.symbol)
+        from enhanced_indicators import enhanced_signal_score
+        from tech_engine import fetch_kline
+        df = fetch_kline(symbol, ktype="1d", num=60)
+        result = enhanced_signal_score(df)
+        output = json.dumps({"symbol": symbol, "result": result, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
+    elif args.command == "earnings":
+        if not args.symbol:
+            print("需要 --symbol", file=sys.stderr); sys.exit(1)
+        symbol = normalize_symbol(args.symbol)
+        from earnings_analyzer import get_earnings_summary
+        result = get_earnings_summary(symbol)
+        output = json.dumps({"symbol": symbol, "result": result, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
+    elif args.command == "decision":
+        if not args.symbol:
+            print("需要 --symbol", file=sys.stderr); sys.exit(1)
+        symbol = normalize_symbol(args.symbol)
+        from decision_engine import compute_decision_fast
+        result = compute_decision_fast(symbol)
+        output = json.dumps({"symbol": symbol, "result": result, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
+    elif args.command == "ml-predict":
+        if not args.symbol:
+            print("需要 --symbol", file=sys.stderr); sys.exit(1)
+        symbol = normalize_symbol(args.symbol)
+        from ml_predictor import predict_direction
+        result = predict_direction(symbol)
+        output = json.dumps({"symbol": symbol, "result": result, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
+    elif args.command == "ml-backtest":
+        if not args.symbol:
+            print("需要 --symbol", file=sys.stderr); sys.exit(1)
+        symbol = normalize_symbol(args.symbol)
+        from ml_predictor import backtest_ml
+        result = backtest_ml(symbol)
+        output = json.dumps({"symbol": symbol, "result": result, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output)
