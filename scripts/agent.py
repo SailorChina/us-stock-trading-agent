@@ -62,30 +62,74 @@ def _adjust_trade_plan(tp, current_price, atr):
 
 
 def run_full_analysis(symbol, timeframe="1d"):
-    """Run complete analysis for a stock"""
-    print(f"Running full analysis for {symbol}...", file=sys.stderr)
+    import threading
+    print("Running FULL analysis for " + symbol + "...", file=sys.stderr)
     t0 = time.time()
-    report = {
-        "symbol": symbol,
-        "generated_at": datetime.now().isoformat(),
-        "modules": {}
-    }
-    report["modules"]["price"] = get_price(symbol)
-    report["modules"]["tech"] = get_tech_analysis(symbol, timeframe)
-    report["modules"]["news"] = get_news(symbol)
-    try:
-        news_data = report["modules"]["news"].get("data", {}).get("data", [])
-        if news_data:
-            analysis, sentiments = analyze_news(news_data)
-            report["modules"]["news_sentiment"] = {"signals": get_sentiment_summary(sentiments), "news": analysis}
-    except Exception:
-        pass
-    report["modules"]["options"] = {
-        "iv": {"value": get_futu_iv(symbol), "status": "ok" if get_futu_iv(symbol) else "unavailable"},
-        "pcr": {"value": get_options_pcr(symbol), "status": "ok" if get_options_pcr(symbol) else "unavailable"},
-        "unusual": get_unusual_options(symbol)
-    }
+    report = {"symbol": symbol, "generated_at": datetime.now().isoformat(), "modules": {}, "summary": {}}
+    results = {}
+    errors = {}
+    def _run(name, fn):
+        try: results[name] = fn()
+        except Exception as e: errors[name] = str(e)
+    def _price(): return get_price(symbol)
+    def _tech(): return get_tech_analysis(symbol, timeframe)
+    def _news():
+        n = get_news(symbol)
+        nd = n.get("data",{}).get("data",[])
+        if nd:
+            a, s = analyze_news(nd)
+            return {"raw": n, "sentiment": {"signals": get_sentiment_summary(s), "news": a}}
+        return {"raw": n}
+    def _options():
+        iv = get_futu_iv(symbol)
+        pcr = get_options_pcr(symbol)
+        return {"iv": {"value": iv, "status": "ok" if iv else "unavailable"}, "pcr": {"value": pcr, "status": "ok" if pcr else "unavailable"}, "unusual": get_unusual_options(symbol)}
+    def _candlestick():
+        from candlestick_patterns import get_latest_patterns
+        from tech_engine import fetch_kline
+        df = fetch_kline(symbol, ktype="1d", num=60)
+        return {"symbol": symbol, "patterns": get_latest_patterns(df, n_patterns=10)}
+    def _enhanced():
+        from enhanced_indicators import enhanced_signal_score
+        from tech_engine import fetch_kline
+        return {"result": enhanced_signal_score(fetch_kline(symbol, ktype="1d", num=60))}
+    def _earnings():
+        from earnings_analyzer import get_earnings_summary
+        return {"result": get_earnings_summary(symbol)}
+    def _decision():
+        from decision_engine import compute_decision_fast
+        return {"result": compute_decision_fast(symbol)}
+    def _regime():
+        from market_regime import get_regime
+        return get_regime()
+    tasks = [("price",_price),("tech",_tech),("news",_news),("options",_options),("candlestick",_candlestick),("enhanced",_enhanced),("earnings",_earnings),("decision",_decision),("regime",_regime)]
+    threads = [threading.Thread(target=_run, args=(name,fn)) for name,fn in tasks]
+    for t in threads: t.start()
+    for t in threads: t.join(timeout=45)
+    for k,v in results.items(): report["modules"][k] = v
+    for k,v in errors.items(): report["modules"][k] = {"status": "error", "error": v}
+    parts = []
+    if "tech" in results:
+        d = results["tech"].get("data",{})
+        parts.append("tech: " + str(d.get("rating","?")) + "(" + str(d.get("score",0)) + ")")
+    if "enhanced" in results:
+        r = results["enhanced"].get("result",{})
+        parts.append("enhanced: " + str(r.get("rating","?")) + "(" + str(r.get("score",0)) + ")")
+    if "candlestick" in results:
+        p = results["candlestick"].get("patterns",[])
+        bull = sum(1 for x in p if x.get("direction")=="bullish")
+        bear = sum(1 for x in p if x.get("direction")=="bearish")
+        parts.append("candlestick: " + str(bull) + "bull/" + str(bear) + "bear")
+    if "decision" in results:
+        d = results["decision"].get("result",{}).get("decision",{})
+        parts.append("decision: " + str(d.get("action","?")) + "(score=" + str(d.get("composite_score",0)) + ")")
+    if "earnings" in results:
+        parts.append("earnings: " + str(results["earnings"].get("result",{}).get("status","?")))
+    if "regime" in results:
+        parts.append("regime: " + str(results["regime"].get("regime","?")))
+    report["summary"] = {"parts": parts, "raw": " | ".join(parts)}
     report["elapsed_sec"] = round(time.time() - t0, 1)
+    report["errors"] = errors if errors else None
     return report
 
 
