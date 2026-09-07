@@ -501,7 +501,8 @@ def format_tech_output(data):
     lines.append("")
     ind = d["indicators"]
     lines.append("  Key Indicators:")
-    lines.append(f"    MA5={ind['ma']['MA5']:.1f} MA10={ind['ma']['MA10']:.1f} MA20={ind['ma']['MA20']:.1f} MA60={ind['ma']['MA60']:.1f}")
+    _ma = ind.get('ma', {})
+    lines.append('    MA5={0:.1f} MA10={1:.1f} MA20={2:.1f} MA60={3:.1f}'.format(_ma.get('MA5',0), _ma.get('MA10',0), _ma.get('MA20',0), _ma.get('MA60',0)))
     if 'aroon' in ind:
         ar = ind['aroon']
         lines.append(f"    Aroon: Up={ar['aroon_up']:.0f} Down={ar['aroon_down']:.0f} Diff={ar['aroon_diff']:.0f}")
@@ -510,22 +511,26 @@ def format_tech_output(data):
         lines.append(f"    ADX: {ad['adx']:.1f} +DI={ad['plus_di']:.1f} -DI={ad['minus_di']:.1f}")
     if 'vwap' in ind:
         lines.append(f"    VWAP: ${ind['vwap']:.2f}")
-    lines.append(f"    MACD: DIF={ind['macd']['dif']:.3f} DEA={ind['macd']['dea']:.3f} Hist={ind['macd']['hist']:.3f} ({ind['macd']['signal']})")
-    lines.append(f"    RSI(14): {ind['rsi']:.1f}")
-    lines.append(f"    KDJ: K={ind['kdj']['k']:.1f} D={ind['kdj']['d']:.1f} J={ind['kdj']['j']:.1f}")
-    lines.append(f"    BOLL: Upper={ind['boll']['upper']:.1f} Mid={ind['boll']['mid']:.1f} Lower={ind['boll']['lower']:.1f} (pos={ind['boll']['position_pct']}%)")
+    _macd = ind.get('macd', {})
+    lines.append('    MACD: DIF={0:.3f} DEA={1:.3f} Hist={2:.3f} ({3})'.format(_macd.get('dif',0), _macd.get('dea',0), _macd.get('hist',0), _macd.get('signal','N/A')))
+    lines.append('    RSI(14): {0:.1f}'.format(ind.get('rsi', 0)))
+    _kdj = ind.get('kdj', {})
+    lines.append('    KDJ: K={0:.1f} D={1:.1f} J={2:.1f}'.format(_kdj.get('k',0), _kdj.get('d',0), _kdj.get('j',0)))
+    _boll = ind.get('boll', {})
+    lines.append('    BOLL: Upper={0:.1f} Mid={1:.1f} Lower={2:.1f} (pos={3}%)'.format(_boll.get('upper',0), _boll.get('mid',0), _boll.get('lower',0), _boll.get('position_pct',0)))
     lines.append("")
-    if d["signals"]:
+    signals = d.get('signals', [])
+    if signals:
         lines.append("  Signals:")
-        for s in d["signals"]:
+        for s in signals:
             lines.append(f"    - {s}")
         lines.append("")
-    tp = d["trade_plan"]
+    _tp = d.get('trade_plan', {})
     lines.append("  Trade Plan:")
-    lines.append(f"    Entry: ${tp['entry_zone']}  Stop: ${tp['stop_loss']}")
-    lines.append(f"    Target1: ${tp['target_1']}  Target2: ${tp['target_2']}")
+    lines.append('    Entry: ${0}  Stop: ${1}'.format(_tp.get('entry_zone',0), _tp.get('stop_loss',0)))
+    lines.append('    Target1: ${0}  Target2: ${1}'.format(_tp.get('target_1',0), _tp.get('target_2',0)))
     strength = d.get('signal_strength', 50)
-    lines.append(f"    R:R = {tp['risk_reward']:.1f}:1  Position: {tp['position_size_pct']:.1f}%  Strength: {strength}/100")
+    lines.append('    R:R = {0:.1f}:1  Position: {1:.1f}%  Strength: {2}/100'.format(_tp.get('risk_reward',0), _tp.get('position_size_pct',0), strength))
     lines.append("")
     lines.append("=" * 60)
     return "\n".join(lines)
