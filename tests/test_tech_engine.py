@@ -175,3 +175,16 @@ def test_calc_rsi_short_df():
     })
     rsi = calc_rsi(df, period=14)
     assert isinstance(rsi, (int, float))
+def test_format_tech_output_price_none():
+    data = {"error": None}
+    result = format_tech_output(data)
+    assert "Unavailable" in result
+
+def test_format_tech_output_price_none_real():
+    data = {"data": {"symbol": "NVDA", "rating": "BUY", "score": 75,
+                     "price": None, "indicators": {"atr": 3.5},
+                     "bar_count": 100, "last_time": "2024-01-01",
+                     "dimensions": {"trend": {"score": 15, "reason": "strong"}}}}
+    result = format_tech_output(data)
+    assert "N/A" in result
+    assert "ATR:" in result

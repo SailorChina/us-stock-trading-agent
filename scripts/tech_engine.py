@@ -481,7 +481,14 @@ def format_tech_output(data):
     lines.append("=" * 60)
     lines.append(f"  {d['symbol']}  Technical Analysis")
     lines.append(f"  Rating: {d['rating']} (Score: {d['score']}/100)")
-    lines.append(f"  Price: ${d['price']['latest_price']:.2f}  ({d['price']['change_pct']:+.2f}%)  ATR: ${d['indicators']['atr']:.2f}")
+    _p = d.get('price') or {}
+    _lp = _p.get('latest_price')
+    _cp = _p.get('change_pct', 0)
+    _atr = d.get('indicators', {}).get('atr', 0)
+    if _lp is not None:
+        lines.append('  Price: ${0:.2f}  ({1:+.2f}%)  ATR: ${2:.2f}'.format(_lp, _cp, _atr))
+    else:
+        lines.append('  Price: N/A  ATR: ${0:.2f}'.format(_atr))
     lines.append(f"  Data: {d['bar_count']} bars  Last: {d['last_time']}")
     lines.append("")
     lines.append("  Dimension Scores:")
