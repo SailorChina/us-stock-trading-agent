@@ -7,18 +7,22 @@
 | 维度 | 模块 | 功能 |
 |------|------|------|
 | **技术分析** | `tech_engine.py` | VCP形态、MACD/RSI/KDJ/BOLL/ATR/OBV/ADXR、多周期共振、TD序列、五档评级 |
-| **资金流向** | `scan_stocks.py` | 板块热度排名、异动股扫描、Meme股追踪、智能选股评分 |
-| **热门榜单** | `tech_engine.py` | Futu热门榜单扫描（Market.US枚举）、聪明钱综合评分 |
+| **增强指标** | `enhanced_indicators.py` | CCI、RVI、StochRSI、Williams %R、OBV背离检测 |
+| **K线形态** | `candlestick_patterns.py` | Doji、Hammer、Engulfing、Morning/Evening Star、三白兵/三鸦 |
+| **聪明钱** | `smart_money_screener.py` | 机构持仓、买卖经纪商、资金流向、卖空追踪 |
+| **热门榜单** | `tech_engine.py` | Futu热门榜单扫描（Market.US枚举）、盘前异动 |
 | **新闻情感** | `news_sentiment.py` | Futu新闻API、正负向词库分析、综合情感评分 |
-| **期权异动** | `options_analysis.py` | IV隐含波动率（get_option_underlying_overview）、PCR看跌看涨比、异常期权成交 |
+| **期权异动** | `options_analysis.py` | IV隐含波动率、PCR看跌看涨比、异常期权成交 |
+| **财报分析** | `earnings_analyzer.py` | PE/Forward PE、EPS增长、营收增长、分析师目标价 |
+| **决策引擎** | `decision_engine.py` | 六因子综合评分、权重融合、自适应交易计划 |
 | **风险管理** | `risk_manager.py` | ATR止损、风险收益比、动态仓位、组合诊断 |
-| **市场情绪** | `market_sentiment.py` | VIX分级、指数报价、Magnificent 7、共享连接池管理 |
-| **智能筛选** | `smart_money_screener.py` | 聪明钱流向筛选、机构持仓追踪 |
+| **市场情绪** | `market_sentiment.py` | VIX分级、指数报价、Magnificent 7 |
+| **市场状态** | `market_regime.py` | Bull/Bear/Volatile/Neutral 自动识别 |
 
 ## 测试状态
 
 ```
-157 passed (全部通过)
+180 passed (全部通过)
 pytest tests/ -q
 ```
 
@@ -51,6 +55,10 @@ pytest tests/ -q
 | `test_trade_journal.py` | 2 | 交易日志增强 |
 | `test_us_stock_analyzer.py` | 2 | 综合分析入口 |
 | `test_watchlist.py` | 4 | 自选股原子写入 |
+| **`test_candlestick_patterns.py`** | **6** | **K线形态检测与评分** |
+| **`test_enhanced_indicators.py`** | **10** | **CCI/RVI/StochRSI/WR/OBV背离** |
+| **`test_earnings_analyzer.py`** | **3** | **财报评分逻辑** |
+| **`test_decision_engine.py`** | **4** | **多因子决策引擎** |
 
 ## 快速使用
 
@@ -63,8 +71,20 @@ python scripts/agent.py analyze US.NVDA
 # 快速信号（技术面）
 python scripts/agent.py signal US.NVDA
 
+# 综合决策（六因子融合）
+python scripts/agent.py decision US.NVDA
+
 # 市场情绪（VIX/指数/Magnificent 7）
 python scripts/market_sentiment.py --mode full
+
+# 增强指标（CCI/RVI/StochRSI/WR/OBV背离）
+python scripts/agent.py divergence US.NVDA
+
+# K线形态识别
+python scripts/agent.py candlestick US.NVDA
+
+# 财报分析
+python scripts/agent.py earnings US.NVDA
 
 # 热门榜单
 python scripts/tech_engine.py --mode hot-list --market US --top 10
@@ -129,8 +149,17 @@ python scripts/smart_money_screener.py --mode quick
 # 分析 NVDA 技术面 + 交易计划
 python scripts/agent.py analyze US.NVDA
 
-# 快速买入信号
-python scripts/agent.py signal US.NVDA
+# 综合决策（六因子融合）
+python scripts/agent.py decision US.NVDA
+
+# K线形态识别
+python scripts/agent.py candlestick US.NVDA
+
+# 增强指标 + OBV背离检测
+python scripts/agent.py divergence US.NVDA
+
+# 财报分析
+python scripts/agent.py earnings US.NVDA
 
 # 生成 HTML 回测报告
 python scripts/backtest_visualize.py US.NVDA
@@ -147,8 +176,12 @@ python scripts/smart_money_screener.py --mode full
 ```
 agent/
 ├── scripts/                    # 核心脚本
-│   ├── agent.py               # 统一入口（analyze/signal/watchlist/checklist/report）
+│   ├── agent.py               # 统一入口（analyze/signal/decision/candlestick/earnings等）
 │   ├── tech_engine.py         # 技术分析引擎（K线/指标/信号/热门榜单）
+│   ├── enhanced_indicators.py  # 增强指标（CCI/RVI/StochRSI/WR/OBV背离）
+│   ├── candlestick_patterns.py # K线形态识别（9种经典形态）
+│   ├── earnings_analyzer.py   # 财报分析（PE/EPS/营收/分析师目标）
+│   ├── decision_engine.py     # 六因子综合决策引擎
 │   ├── smart_money_screener.py # 聪明钱筛选器
 │   ├── market_sentiment.py    # 市场情绪（VIX/指数/M7）
 │   ├── news_sentiment.py      # 新闻情感分析
@@ -168,7 +201,7 @@ agent/
 │   ├── diagnose.py            # 环境健康检查
 │   ├── cache_util.py          # 缓存工具（retry_call/get_cached）
 │   └── logger.py              # 日志工具
-├── tests/                      # 测试套件（157 tests）
+├── tests/                      # 测试套件（180 tests）
 ├── configs/
 │   └── settings.toml          # 全局配置（风险/扫描/情绪阈值）
 ├── knowledge/
@@ -184,7 +217,7 @@ agent/
 | 数据源 | 用途 | 状态 |
 |--------|------|------|
 | **Futu OpenAPI** | K线、热门榜单、资金流向、新闻搜索、期权数据、IV/PCR | Primary |
-| **Yahoo Finance** | VIX、指数、M7报价、Sector ETF、宏观指标 | Fallback |
+| **Yahoo Finance** | VIX、指数、M7报价、Sector ETF、财报/分析师数据 | Fallback |
 | **Sina API** | 板块热度排名（缓存30分钟） | Fallback |
 
 ## 配置说明
@@ -234,7 +267,7 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
-- **v2.8.0** - 修复6个深度BUG：get_price热点连接池泄漏、get_hot_list Market枚举、scan_stocks ScanConfig未定义、options IV/PCR错误API、market_sentiment连接泄漏；157测试全部通过
+- **v2.9.0** - 新增K线形态识别、增强指标(CCI/RVI/StochRSI/WR/OBV背离)、财报分析、六因子决策引擎、180测试全部通过
+- **v2.8.0** - 修复6个深度BUG：get_price连接池泄漏、get_hot_list Market枚举、scan_stocks ScanConfig未定义、options IV/PCR错误API、market_sentiment连接泄漏
 - **v2.7.0** - 聪明钱筛选器、155项测试、价格实时修正
-- **v2.6.0** - 聪明钱筛选器
 - **v1.0.0** - 初始版本：基础分析、回测、风险计算
