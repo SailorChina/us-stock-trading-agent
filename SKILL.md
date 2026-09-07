@@ -7,6 +7,7 @@ description: >
   使用场景：
   - 单只股票全面分析（技术面+资金+新闻+期权）
   - 多空信号生成与评级（Buy/Overweight/Hold/Underweight/Sell）
+  - 六因子综合决策（技术+增强指标+K线形态+财报+市场状态+聪明钱）
   - 交易计划制定（入场/止损/目标/仓位）
   - 组合/持仓诊断与风险预警
   - 选股与板块扫描
@@ -15,13 +16,17 @@ description: >
   - 盘前/盘后异动监控
   - 宏观经济日历
   - 回测与策略验证
+  - K线形态识别（Doji/Hammer/Engulfing/Star等）
+  - 增强指标分析（CCI/RVI/StochRSI/Williams%R/OBV背离）
+  - 财报与分析师评级分析
   
   触发关键词：美股分析、股票分析、买卖信号、选股、交易计划、
   技术分析、资金流向、期权异动、情绪分析、持仓诊断、
   止损止盈、仓位管理、板块轮动、美股推荐、NVDA分析、TSLA分析、
-  盘前扫描、宏观日历、回测、Risk Manager、聪明钱、热门榜单
+  盘前扫描、宏观日历、回测、Risk Manager、聪明钱、热门榜单、
+  K线形态、MACD金叉、RSI超买、OBV背离、财报分析、决策引擎
 metadata:
-  version: 2.8.0
+  version: 2.9.0
   author: agent-builder
   requires:
     - futuapi

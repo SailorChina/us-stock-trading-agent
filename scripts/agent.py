@@ -13,6 +13,10 @@ try:
     from options_analysis import get_futu_iv, get_options_pcr, get_unusual_options
     from watchlist import load_watchlist, add_stock, remove_stock
     from smart_money_screener import scan_smart_money
+    from candlestick_patterns import get_latest_patterns, pattern_score
+    from enhanced_indicators import enhanced_signal_score
+    from earnings_analyzer import get_earnings_summary, earnings_score
+    from decision_engine import compute_decision_fast
     from daily_checklist import pre_market_check, check_stock
     from trade_journal import add_trade, list_trades
     from risk_manager import generate_risk_report, dynamic_position_size
@@ -142,7 +146,7 @@ Examples:
   python agent.py checklist                  # Pre-market check
   python agent.py report NVDA                # Quick report
 """)
-    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot"],
+    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot", "divergence", "candlestick", "earnings", "decision"],
                        help="Command to run")
     parser.add_argument("symbol", nargs="?", help="Stock symbol (e.g., NVDA, US.NVDA)")
     parser.add_argument("--timeframe", default="1d")
