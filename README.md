@@ -1,4 +1,4 @@
-﻿# US Stock Trading Agent
+# US Stock Trading Agent
 
 美股交易专家 Agent，整合**技术分析、资金流向、新闻情感、期权异动、风险管理**五大维度，为美股提供全面的交易分析与决策支持。
 
@@ -6,12 +6,14 @@
 
 | 维度 | 模块 | 功能 |
 |------|------|------|
-| **技术分析** | `us_stock_analyzer.py` | VCP形态、MACD/RSI/KDJ/BOLL、多周期共振、TD序列、五档评级 |
-| **资金流向** | `scan_stocks.py` | 板块热度排名、异动股扫描、Meme股追踪 |
-| **热门榜单** | `tech_engine.py` | Futu热门榜单扫描、聪明钱综合评分 |
+| **技术分析** | `tech_engine.py` | VCP形态、MACD/RSI/KDJ/BOLL/ATR/OBV/ADXR、多周期共振、TD序列、五档评级 |
+| **资金流向** | `scan_stocks.py` | 板块热度排名、异动股扫描、Meme股追踪、智能选股评分 |
+| **热门榜单** | `tech_engine.py` | Futu热门榜单扫描（Market.US枚举）、聪明钱综合评分 |
 | **新闻情感** | `news_sentiment.py` | Futu新闻API、正负向词库分析、综合情感评分 |
-| **期权异动** | `options_analysis.py` | IV隐含波动率、PCR看跌看涨比、异常期权成交 |
+| **期权异动** | `options_analysis.py` | IV隐含波动率（get_option_underlying_overview）、PCR看跌看涨比、异常期权成交 |
 | **风险管理** | `risk_manager.py` | ATR止损、风险收益比、动态仓位、组合诊断 |
+| **市场情绪** | `market_sentiment.py` | VIX分级、指数报价、Magnificent 7、共享连接池管理 |
+| **智能筛选** | `smart_money_screener.py` | 聪明钱流向筛选、机构持仓追踪 |
 
 ## 测试状态
 
@@ -22,18 +24,32 @@ pytest tests/ -q
 
 | 测试文件 | 测试数 | 覆盖模块 |
 |----------|--------|----------|
-| `test_auto_analyzer.py` | 2 | 自动分析摘要输出 |
-| `test_backtest.py` | 2 | MA策略回测逻辑 |
+| `test_agent.py` | 8 | 统一入口、信号生成、交易计划 |
+| `test_auto_analyzer.py` | 3 | 自动分析摘要输出 |
+| `test_auto_trader.py` | 3 | 模拟盘下单、交易日志 |
+| `test_backtest.py` | 3 | MA策略回测逻辑 |
 | `test_backtest_visualize.py` | 5 | 权益曲线、最大回撤、HTML报告 |
 | `test_config.py` | 2 | TOML配置加载与点路径查询 |
+| `test_daily_checklist.py` | 3 | 每日检查清单 |
+| `test_diagnose.py` | 1 | 环境健康检查 |
+| `test_hot_list.py` | 1 | 热门榜单扫描 |
 | `test_journal.py` | 2 | 交易日志持久化 |
 | `test_logger.py` | 1 | 日志系统 |
 | `test_macro_calendar.py` | 2 | 宏观经济日历（VIX/10Y/DXY） |
+| `test_market_regime.py` | 2 | 市场状态判断 |
+| `test_market_sentiment.py` | 3 | 市场情绪（VIX/指数/M7） |
 | `test_news_sentiment.py` | 4 | 新闻情感分析（正/负/中性） |
+| `test_options_analysis.py` | 13 | IV/PCR分类、异常期权 |
 | `test_portfolio_diagnose.py` | 10 | 组合诊断（高风险/低现金/止损破位等） |
 | `test_premarket_scanner.py` | 2 | 盘前/盘后异动扫描 |
 | `test_risk.py` | 6 | ATR止损、风险收益比、仓位管理 |
+| `test_scan_stocks.py` | 1 | 选股扫描入口 |
+| `test_smart_money.py` | 3 | 聪明钱筛选 |
+| `test_smart_money_screener.py` | 3 | 智能筛选器 |
 | `test_syntax.py` | 1 | 所有脚本编译检查 |
+| `test_tech_engine.py` | 24 | 技术指标计算、信号生成、格式化输出 |
+| `test_trade_journal.py` | 2 | 交易日志增强 |
+| `test_us_stock_analyzer.py` | 2 | 综合分析入口 |
 | `test_watchlist.py` | 4 | 自选股原子写入 |
 
 ## 快速使用
@@ -42,25 +58,31 @@ pytest tests/ -q
 
 ```bash
 # 单股全面分析
-python scripts/us_stock_analyzer.py NVDA
+python scripts/agent.py analyze US.NVDA
 
 # 快速信号（技术面）
-python scripts/agent.py signal NVDA
-
-# 完整分析（技术+新闻+期权）
-python scripts/agent.py analyze NVDA --timeframe 1d
+python scripts/agent.py signal US.NVDA
 
 # 市场情绪（VIX/指数/Magnificent 7）
 python scripts/market_sentiment.py --mode full
 
-# 板块热度
-python scripts/scan_stocks.py --mode sector --top 5
+# 热门榜单
+python scripts/tech_engine.py --mode hot-list --market US --top 10
 
 # 选股扫描
 python scripts/scan_stocks.py --mode scan --min-score 55
 
+# 板块热度
+python scripts/scan_stocks.py --mode sector --top 5
+
 # Meme股追踪
 python scripts/scan_stocks.py --mode meme-scan
+
+# 盘前扫描
+python scripts/scan_stocks.py --mode premarket
+
+# 期权分析
+python scripts/options_analysis.py --symbol US.NVDA --mode full
 
 # 回测
 python scripts/backtest.py US.NVDA --period daily --count 200
@@ -70,9 +92,6 @@ python scripts/backtest_visualize.py US.NVDA --output data/report.html
 
 # 新闻情感分析
 python scripts/news_sentiment.py --symbol US.NVDA --size 10
-
-# 期权分析
-python scripts/options_analysis.py --symbol US.NVDA --mode full
 
 # 风险管理
 python scripts/risk_manager.py --action report --symbol US.NVDA --entry 220 --atr 7.76 --position-pct 0.15
@@ -99,25 +118,28 @@ python scripts/auto_analyzer.py --daemon --interval 1
 
 # 环境诊断
 python scripts/diagnose.py
+
+# 智能筛选（聪明钱）
+python scripts/smart_money_screener.py --mode quick
 ```
 
 ### 使用示例
 
 ```bash
-# 分析 NVDA 技术面
-python scripts/us_stock_analyzer.py NVDA
-
-# 分析 NVDA 并查看资金流向
-python scripts/us_stock_analyzer.py US.NVDA --dimensions tech,capital
+# 分析 NVDA 技术面 + 交易计划
+python scripts/agent.py analyze US.NVDA
 
 # 快速买入信号
-python scripts/agent.py signal NVDA
+python scripts/agent.py signal US.NVDA
 
 # 生成 HTML 回测报告
 python scripts/backtest_visualize.py US.NVDA
 
 # 风险计算：入场价 220，ATR 7.76，仓位 15%
 python scripts/risk_manager.py --action report --symbol US.NVDA --entry 220 --atr 7.76 --position-pct 0.15
+
+# 聪明钱筛选
+python scripts/smart_money_screener.py --mode full
 ```
 
 ## 项目结构
@@ -126,11 +148,12 @@ python scripts/risk_manager.py --action report --symbol US.NVDA --entry 220 --at
 agent/
 ├── scripts/                    # 核心脚本
 │   ├── agent.py               # 统一入口（analyze/signal/watchlist/checklist/report）
-│   ├── us_stock_analyzer.py   # 单股综合分析（技术+资金+新闻）
+│   ├── tech_engine.py         # 技术分析引擎（K线/指标/信号/热门榜单）
+│   ├── smart_money_screener.py # 聪明钱筛选器
 │   ├── market_sentiment.py    # 市场情绪（VIX/指数/M7）
 │   ├── news_sentiment.py      # 新闻情感分析
-│   ├── options_analysis.py    # 期权/衍生品分析
-│   ├── scan_stocks.py         # 选股扫描（sector/scan/meme）
+│   ├── options_analysis.py    # 期权/衍生品分析（IV/PCR）
+│   ├── scan_stocks.py         # 选股扫描（sector/scan/meme/premarket）
 │   ├── risk_manager.py        # 风险管理（止损/仓位/报告）
 │   ├── portfolio_diagnose.py  # 组合健康诊断
 │   ├── backtest.py            # 策略回测（MA交叉）
@@ -145,20 +168,7 @@ agent/
 │   ├── diagnose.py            # 环境健康检查
 │   ├── cache_util.py          # 缓存工具（retry_call/get_cached）
 │   └── logger.py              # 日志工具
-├── tests/                      # 测试套件
-│   ├── test_auto_analyzer.py
-│   ├── test_backtest.py
-│   ├── test_backtest_visualize.py
-│   ├── test_config.py
-│   ├── test_journal.py
-│   ├── test_logger.py
-│   ├── test_macro_calendar.py
-│   ├── test_news_sentiment.py
-│   ├── test_portfolio_diagnose.py
-│   ├── test_premarket_scanner.py
-│   ├── test_risk.py
-│   ├── test_syntax.py
-│   └── test_watchlist.py
+├── tests/                      # 测试套件（157 tests）
 ├── configs/
 │   └── settings.toml          # 全局配置（风险/扫描/情绪阈值）
 ├── knowledge/
@@ -173,7 +183,7 @@ agent/
 
 | 数据源 | 用途 | 状态 |
 |--------|------|------|
-| **Futu OpenAPI** | K线、资金流向、新闻搜索、期权数据 | Primary |
+| **Futu OpenAPI** | K线、热门榜单、资金流向、新闻搜索、期权数据、IV/PCR | Primary |
 | **Yahoo Finance** | VIX、指数、M7报价、Sector ETF、宏观指标 | Fallback |
 | **Sina API** | 板块热度排名（缓存30分钟） | Fallback |
 
@@ -183,7 +193,7 @@ agent/
 
 - `[general]` - 默认时间框架、风险等级
 - `[futu]` - Futu OpenD 连接配置（host/port/env）
-- `[technical]` - 技术指标偏好（MA/MACD/RSI/KDJ/BOLL/ATR/OBV）
+- `[technical]` - 技术指标偏好（MA/MACD/RSI/KDJ/BOLL/ATR/OBV/ADX）
 - `[portfolio]` - 资金管理（最大仓位、行业集中度、现金储备）
 - `[risk]` - 风控参数（ATR倍数、固定止损、追踪止损、日/周亏损限制）
 - `[scan]` - 选股条件（市值、均线、RSI、利润率、营收增长）
@@ -224,5 +234,7 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
-- **v2.6.0** - 聪明钱筛选器、155项测试(约130 passed, 25 network deselected)、价格实时修正、全覆盖测试
+- **v2.8.0** - 修复6个深度BUG：get_price热点连接池泄漏、get_hot_list Market枚举、scan_stocks ScanConfig未定义、options IV/PCR错误API、market_sentiment连接泄漏；157测试全部通过
+- **v2.7.0** - 聪明钱筛选器、155项测试、价格实时修正
+- **v2.6.0** - 聪明钱筛选器
 - **v1.0.0** - 初始版本：基础分析、回测、风险计算
