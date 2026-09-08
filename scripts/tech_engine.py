@@ -424,7 +424,7 @@ def generate_signal(symbol, timeframe="1d", num_bars=60):
     elif boll["position_pct"] > 80: signals.append("Near Bollinger upper band")
     return {"module": "tech", "status": "ok", "symbol": symbol,
             "generated_at": datetime.now().isoformat(),
-            "data": {"rating": rating, "score": total_score, "price": price,
+            "data": {"rating": rating, "score": total_score, "price": price, "_kline": df,
                      "dimensions": dims,
                      "indicators": {"ma": ma, "ema": ema, "macd": macd, "rsi": round(rsi, 1),
                                     "kdj": kdj, "boll": boll, "atr": round(atr, 2),

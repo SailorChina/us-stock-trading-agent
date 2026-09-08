@@ -83,8 +83,12 @@ def merge_and_rank(smart_result, hot_result, top_n=10):
     return candidates[:top_n]
 
 
-def run_full_analysis(symbol, timeframe="1d", smart_money_data=None):
+def run_full_analysis(symbol, timeframe="1d", smart_money_data=None, price_map=None, tech_cache=None):
     from us_stock_analyzer import get_price, get_tech_analysis, get_news
+    # Override price module with cached data from smart money scan
+    cached_price = (price_map or {}).get(symbol)
+    # Override tech module with cached data from smart money scan
+    cached_tech = (tech_cache or {}).get(symbol)
     from news_sentiment import fetch_news, analyze_news, get_sentiment_summary
     from options_analysis import get_futu_iv, get_options_pcr, get_unusual_options
     from candlestick_patterns import get_latest_patterns
@@ -120,11 +124,15 @@ def run_full_analysis(symbol, timeframe="1d", smart_money_data=None):
                 "unusual": get_unusual_options(sym)}
 
     def _candlestick_fn(sym):
-        df = fetch_kline(sym, ktype="1d", num=60)
+        df = (cached_tech.get("data", {}).get("_kline") if cached_tech else None)
+        if df is None:
+            df = fetch_kline(sym, ktype="1d", num=60)
         return {"patterns": get_latest_patterns(df, n_patterns=10)}
 
     def _enhanced_fn(sym):
-        df = fetch_kline(sym, ktype="1d", num=60)
+        df = (cached_tech.get("data", {}).get("_kline") if cached_tech else None)
+        if df is None:
+            df = fetch_kline(sym, ktype="1d", num=60)
         return {"result": enhanced_signal_score(df)}
 
     def _earnings_fn(sym):
@@ -134,8 +142,8 @@ def run_full_analysis(symbol, timeframe="1d", smart_money_data=None):
         return {"result": compute_decision_fast(sym, smart_money_data=smart_money_data)}
 
     tasks = [
-        ("price", lambda: get_price(symbol)),
-        ("tech", lambda: get_tech_analysis(symbol, timeframe)),
+        ("price", lambda: cached_price if cached_price else get_price(symbol)),
+        ("tech", lambda: cached_tech if cached_tech else get_tech_analysis(symbol, timeframe)),
         ("news", lambda: _news_fn(symbol)),
         ("options", lambda: _options_fn(symbol)),
         ("candlestick", lambda: _candlestick_fn(symbol)),
@@ -176,11 +184,11 @@ def run_full_analysis(symbol, timeframe="1d", smart_money_data=None):
     return report
 
 
-def run_analysis_parallel(symbols, max_workers=5, smart_money_data=None):
+def run_analysis_parallel(symbols, max_workers=5, smart_money_data=None, price_map=None, tech_cache=None):
     results = {}
     errors = {}
     def _worker(sym):
-        try: results[sym] = run_full_analysis(sym)
+        try: results[sym] = run_full_analysis(sym, price_map=price_map, tech_cache=tech_cache)
         except Exception as e: errors[sym] = str(e)
     # Sequential execution for thread safety with shared futu context
     for sym in symbols:
@@ -247,6 +255,10 @@ def format_table(candidates, analysis_results, errors):
             tech_mod = res.get("modules", {}).get("tech") or {}
             tp = tech_mod.get("data", {}).get("trade_plan", {})
             current_price = price_mod.get("latest_price", 0)
+            # Fallback to decision module price if price module is null
+            if current_price == 0:
+                dec_mod = res.get("modules", {}).get("decision", {}).get("result", {}).get("decision", {})
+                current_price = dec_mod.get("current_price", 0)
             entry = tp.get("entry_zone", 0)
             stop = tp.get("stop_loss", 0)
             target = tp.get("target_1", 0)
@@ -315,6 +327,8 @@ Examples:
     scan_time = round(time.time() - t0, 1)
     print("  Scan done in {}s  (smart={}  hot={})".format(scan_time, smart_result["count"], hot_result["count"]), file=sys.stderr)
 
+    # Brief pause after heavy scan to let futu context stabilize
+    time.sleep(5)
     print("Phase 2: Merging and ranking candidates...", file=sys.stderr)
     candidates = merge_and_rank(smart_result, hot_result, top_n=args.top)
     print("  {} candidates ranked".format(len(candidates)), file=sys.stderr)
@@ -325,10 +339,23 @@ Examples:
     print("Phase 3: Running full analysis on top {} picks...".format(len(candidates)), file=sys.stderr)
     t0 = time.time()
     all_smart = smart_result.get("data", [])
+    # Build price map and tech cache from smart money data to avoid futu API degeneration after scan
+    price_map = {}
+    tech_cache = {}
+    for item in all_smart:
+        sym = item.get("symbol", "")
+        pr = item.get("price") or {}
+        if pr:
+            price_map[sym] = pr
+        tc = item.get("tech") or {}
+        if tc and tc.get("status") == "ok":
+            tech_cache[sym] = tc
     analysis_results, errors = run_analysis_parallel(
         [c["symbol"] for c in candidates],
         max_workers=min(len(candidates), 5),
-        smart_money_data=all_smart
+        smart_money_data=all_smart,
+        price_map=price_map,
+        tech_cache=tech_cache
     )
     analyze_time = round(time.time() - t0, 1)
     print("  Analysis done in {}s  ({} ok, {} errors)".format(analyze_time, len(analysis_results), len(errors)), file=sys.stderr)
