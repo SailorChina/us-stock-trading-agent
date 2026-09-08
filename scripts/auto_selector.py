@@ -14,7 +14,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 from smart_money_screener import scan_smart_money
-from tech_engine import get_hot_list_futu, get_price, generate_signal
+from tech_engine import get_hot_list_futu, generate_signal
 
 
 def _futu_available(timeout=2):
@@ -54,7 +54,7 @@ def merge_and_rank(smart_result, hot_result, top_n=10):
         hot_score = ht.get("hot_score", 0)
         hot_norm = min(hot_score / 100.0 * 30, 30) if hot_score > 0 else 0
         composite = smart_score + hot_norm
-        price_data = get_price(sym) or {}
+        price_data = sm.get("price") or {}
         price = price_data.get("latest_price", 0)
         chg = price_data.get("change_pct", 0)
         sources = []
