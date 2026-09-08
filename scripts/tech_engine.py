@@ -538,7 +538,7 @@ def get_hot_list_futu(top=30):
         if ctx is None:
             return []
         try:
-            ret, result = ctx.get_hot_list(['US'], count=top)
+            ret, result = ctx.get_hot_list('US', count=top)
             if ret != 0 or result is None:
                 return []
             if isinstance(result, tuple):

@@ -144,9 +144,9 @@ def run_full_analysis(symbol, timeframe="1d", smart_money_data=None):
         ("decision", lambda: _decision_fn(symbol)),
         ("regime", get_regime),
     ]
-    threads = [threading.Thread(target=_run, args=(name, fn)) for name, fn in tasks]
-    for t in threads: t.start()
-    for t in threads: t.join(timeout=45)
+    # Sequential execution to avoid shared futu context thread-safety issues
+    for name, fn in tasks:
+        _run(name, fn)
     for k, v in results.items(): report["modules"][k] = v
     for k, v in errors.items(): report["modules"][k] = {"status": "error", "error": v}
 
@@ -182,16 +182,9 @@ def run_analysis_parallel(symbols, max_workers=5, smart_money_data=None):
     def _worker(sym):
         try: results[sym] = run_full_analysis(sym)
         except Exception as e: errors[sym] = str(e)
-    threads = []
+    # Sequential execution for thread safety with shared futu context
     for sym in symbols:
-        t = threading.Thread(target=_worker, args=(sym,))
-        threads.append(t)
-        if len(threads) >= max_workers:
-            for t in threads: t.start()
-            for t in threads: t.join(timeout=60)
-            threads = []
-    for t in threads: t.start()
-    for t in threads: t.join(timeout=60)
+        _worker(sym)
     return results, errors
 
 

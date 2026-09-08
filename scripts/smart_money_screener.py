@@ -49,99 +49,95 @@ def scan_smart_money(top_n=15, min_score=20):
     results = []
     ctx = get_futu_context()
 
-    try:
-        # 1. Fetch short selling data once
-        short_map = {}
-        ret, result = ctx.get_short_selling_rank()
-        if ret == RET_OK and result is not None:
-            df = result[1] if isinstance(result, tuple) else result
-            if df is not None:
-                for _, r in df.iterrows():
-                    short_map[r.get("security", "")] = {
-                        "short_ratio": float(r.get("short_ratio", 0)),
-                        "short_number": int(r.get("short_number", 0)),
-                    }
-        print(f"  Short data: {len(short_map)} stocks", file=sys.stderr)
+    # 1. Fetch short selling data once
+    short_map = {}
+    ret, result = ctx.get_short_selling_rank()
+    if ret == RET_OK and result is not None:
+        df = result[1] if isinstance(result, tuple) else result
+        if df is not None:
+            for _, r in df.iterrows():
+                short_map[r.get("security", "")] = {
+                    "short_ratio": float(r.get("short_ratio", 0)),
+                    "short_number": int(r.get("short_number", 0)),
+                }
+    print(f"  Short data: {len(short_map)} stocks", file=sys.stderr)
 
-        # 2. Fetch capital flow for each stock (batch with delays)
-        flow_map = {}
-        for sym in SMART_UNIVERSE:
-            try:
-                ret, df = ctx.get_capital_flow(sym)
-                if ret == RET_OK and df is not None and len(df) > 10:
-                    df = df.sort_values("capital_flow_item_time").tail(5 * 72)
-                    if len(df) >= 12:
-                        df["date"] = pd.to_datetime(df["capital_flow_item_time"]).dt.date
-                        daily = df.groupby("date").agg({
-                            "super_in_flow": "sum", "big_in_flow": "sum",
-                            "mid_in_flow": "sum", "sml_in_flow": "sum",
-                        }).reset_index()
-                        daily["smart"] = daily["super_in_flow"] + daily["big_in_flow"]
-                        daily["retail"] = daily["mid_in_flow"] + daily["sml_in_flow"]
-                        daily = daily.tail(5).reset_index(drop=True)
-                        if len(daily) >= 1:
-                            ts = daily["smart"].sum()
-                            tr = daily["retail"].sum()
-                            dom = ts / (abs(ts) + abs(tr) + 1)
-                            cons = sum(1 for _, row in daily.iterrows()
-                                      if row["smart"] > 0)
-                            flow_map[sym] = {"dom": dom, "cons": cons, "ts": ts, "tr": tr}
-                time.sleep(0.1)
-            except Exception as e:
-                print(f"  Flow error {sym}: {e}", file=sys.stderr)
-        print(f"  Flow data: {len(flow_map)} stocks", file=sys.stderr)
+    # 2. Fetch capital flow for each stock (batch with delays)
+    flow_map = {}
+    for sym in SMART_UNIVERSE:
+        try:
+            ret, df = ctx.get_capital_flow(sym)
+            if ret == RET_OK and df is not None and len(df) > 10:
+                df = df.sort_values("capital_flow_item_time").tail(5 * 72)
+                if len(df) >= 12:
+                    df["date"] = pd.to_datetime(df["capital_flow_item_time"]).dt.date
+                    daily = df.groupby("date").agg({
+                        "super_in_flow": "sum", "big_in_flow": "sum",
+                        "mid_in_flow": "sum", "sml_in_flow": "sum",
+                    }).reset_index()
+                    daily["smart"] = daily["super_in_flow"] + daily["big_in_flow"]
+                    daily["retail"] = daily["mid_in_flow"] + daily["sml_in_flow"]
+                    daily = daily.tail(5).reset_index(drop=True)
+                    if len(daily) >= 1:
+                        ts = daily["smart"].sum()
+                        tr = daily["retail"].sum()
+                        dom = ts / (abs(ts) + abs(tr) + 1)
+                        cons = sum(1 for _, row in daily.iterrows()
+                                  if row["smart"] > 0)
+                        flow_map[sym] = {"dom": dom, "cons": cons, "ts": ts, "tr": tr}
+            time.sleep(0.1)
+        except Exception as e:
+            print(f"  Flow error {sym}: {e}", file=sys.stderr)
+    print(f"  Flow data: {len(flow_map)} stocks", file=sys.stderr)
 
-        # 3. Score each stock
-        for sym in SMART_UNIVERSE:
-            score = 0
-            signals = []
+    # 3. Score each stock
+    for sym in SMART_UNIVERSE:
+        score = 0
+        signals = []
 
-            # Capital flow (0-30)
-            fl = flow_map.get(sym, {})
-            fl_score = 0
-            if fl:
-                if fl["dom"] > 0.3: fl_score += 15; signals.append(f"Smart{fl['dom']:.0%}")
-                elif fl["dom"] > 0: fl_score += 8
-                if fl["cons"] >= 3: fl_score += 10; signals.append(f"{fl['cons']}d buying")
-                elif fl["cons"] >= 1: fl_score += 5
-                if abs(fl["ts"]) + abs(fl["tr"]) > 1e6: fl_score += 5
-            fl_score = min(30, fl_score)
+        # Capital flow (0-30)
+        fl = flow_map.get(sym, {})
+        fl_score = 0
+        if fl:
+            if fl["dom"] > 0.3: fl_score += 15; signals.append(f"Smart{fl['dom']:.0%}")
+            elif fl["dom"] > 0: fl_score += 8
+            if fl["cons"] >= 3: fl_score += 10; signals.append(f"{fl['cons']}d buying")
+            elif fl["cons"] >= 1: fl_score += 5
+            if abs(fl["ts"]) + abs(fl["tr"]) > 1e6: fl_score += 5
+        fl_score = min(30, fl_score)
 
-            # Short squeeze (0-20)
-            sq = short_map.get(sym, {})
-            sq_score = 0
-            if sq.get("short_ratio", 0) > 5:
-                sq_score = min(20, int(sq["short_ratio"] * 1.5))
-                signals.append(f"Short{sq['short_ratio']:.0f}%")
+        # Short squeeze (0-20)
+        sq = short_map.get(sym, {})
+        sq_score = 0
+        if sq.get("short_ratio", 0) > 5:
+            sq_score = min(20, int(sq["short_ratio"] * 1.5))
+            signals.append(f"Short{sq['short_ratio']:.0f}%")
 
-            # Technical (0-25)
-            tech = generate_signal(sym, num_bars=60)
-            tc = 0
-            if tech["status"] == "ok":
-                d = tech["data"]
-                rs = {"Buy": 25, "Overweight": 18, "Hold": 10, "Underweight": 4, "Sell": 0}
-                tc = rs.get(d["rating"], 5)
-                if d["score"] >= 60: tc = min(25, tc + 5)
+        # Technical (0-25)
+        tech = generate_signal(sym, num_bars=60)
+        tc = 0
+        if tech["status"] == "ok":
+            d = tech["data"]
+            rs = {"Buy": 25, "Overweight": 18, "Hold": 10, "Underweight": 4, "Sell": 0}
+            tc = rs.get(d["rating"], 5)
+            if d["score"] >= 60: tc = min(25, tc + 5)
 
-            # Momentum (0-15)
-            pr = get_price(sym)
-            mc = 0
-            if pr:
-                chg = pr.get("change_pct", 0)
-                mc = 15 if chg > 3 else 10 if chg > 1 else 5 if chg > 0 else 0
+        # Momentum (0-15)
+        pr = get_price(sym)
+        mc = 0
+        if pr:
+            chg = pr.get("change_pct", 0)
+            mc = 15 if chg > 3 else 10 if chg > 1 else 5 if chg > 0 else 0
 
-            total = fl_score + sq_score + tc + mc
-            if total >= min_score:
-                results.append({
-                    "symbol": sym, "total_score": total,
-                    "flow_score": fl_score, "squeeze_score": sq_score,
-                    "tech_score": tc, "mom_score": mc,
-                    "signals": signals[:4], "price": pr, "tech": tech,
-                })
-            time.sleep(0.05)
-
-    finally:
-        ctx.close()
+        total = fl_score + sq_score + tc + mc
+        if total >= min_score:
+            results.append({
+                "symbol": sym, "total_score": total,
+                "flow_score": fl_score, "squeeze_score": sq_score,
+                "tech_score": tc, "mom_score": mc,
+                "signals": signals[:4], "price": pr, "tech": tech,
+            })
+        time.sleep(0.05)
 
     results.sort(key=lambda x: x["total_score"], reverse=True)
     return results[:top_n]
