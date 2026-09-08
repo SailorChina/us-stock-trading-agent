@@ -24,7 +24,7 @@ def _try_import(module_name, func_name):
         return None
 
 
-def compute_decision(symbol: str, timeframe: str = "1d") -> Dict:
+def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool = False) -> Dict:
     """Compute a comprehensive trading decision from all available signals."""
     t0 = time.time()
     result = {
@@ -115,20 +115,21 @@ def compute_decision(symbol: str, timeframe: str = "1d") -> Dict:
         result["factors"]["regime"] = {"error": str(e), "weight": 10, "weighted_score": 0}
     
     # 6. Smart Money (weight: 10%)
-    try:
-        sm = scan_smart_money(top_n=50, min_score=10)
-        sm_score = 50
-        for item in sm[:10] if isinstance(sm, list) else []:
-            if item.get("code") == symbol or item.get("symbol") == symbol:
-                sm_score = item.get("smart_score", 50)
-                break
-        result["factors"]["smart_money"] = {
-            "score": sm_score,
-            "weight": 10,
-            "weighted_score": sm_score * 0.10,
-        }
-    except Exception as e:
-        result["factors"]["smart_money"] = {"error": str(e), "weight": 10, "weighted_score": 0}
+    if not skip_smart_money:
+        try:
+            sm = scan_smart_money(top_n=50, min_score=10)
+            sm_score = 50
+            for item in sm[:10] if isinstance(sm, list) else []:
+                if item.get("code") == symbol or item.get("symbol") == symbol:
+                    sm_score = item.get("smart_score", 50)
+                    break
+            result["factors"]["smart_money"] = {
+                "score": sm_score,
+                "weight": 10,
+                "weighted_score": sm_score * 0.10,
+            }
+        except Exception as e:
+            result["factors"]["smart_money"] = {"error": str(e), "weight": 10, "weighted_score": 0}
     
     # Compute composite score
     total_weighted = sum(f.get("weighted_score", 0) for f in result["factors"].values() 
@@ -136,7 +137,7 @@ def compute_decision(symbol: str, timeframe: str = "1d") -> Dict:
     total_weight = sum(f.get("weight", 0) for f in result["factors"].values()
                        if isinstance(f, dict) and "weight" in f)
     
-    composite = total_weighted / total_weight if total_weight > 0 else 50
+    composite = total_weighted if total_weight > 0 else 50
     composite = max(0, min(100, composite))
     
     # Decision logic
@@ -206,32 +207,7 @@ def compute_decision(symbol: str, timeframe: str = "1d") -> Dict:
 
 def compute_decision_fast(symbol: str) -> Dict:
     """Fast decision without smart money (avoid heavy scan)."""
-    result = compute_decision(symbol)
-    # Remove smart money factor for fast mode
-    if "smart_money" in result["factors"]:
-        sm = result["factors"].pop("smart_money")
-        # Recalculate composite without smart money
-        total_weighted = sum(f.get("weighted_score", 0) for f in result["factors"].values() 
-                            if isinstance(f, dict) and "weighted_score" in f)
-        total_weight = sum(f.get("weight", 0) for f in result["factors"].values()
-                           if isinstance(f, dict) and "weight" in f)
-        composite = total_weighted / total_weight if total_weight > 0 else 50
-        composite = max(0, min(100, composite))
-        if composite >= 70:
-            decision = "STRONG_BUY"
-        elif composite >= 58:
-            decision = "BUY"
-        elif composite >= 42:
-            decision = "HOLD"
-        elif composite >= 30:
-            decision = "SELL"
-        else:
-            decision = "STRONG_SELL"
-        result["decision"]["composite_score"] = round(composite, 1)
-        result["decision"]["decision"] = decision
-        result["decision"]["action"] = "BUY" if decision in ("BUY", "STRONG_BUY") else "SELL" if decision in ("SELL", "STRONG_SELL") else "HOLD"
-        result["factors"]["smart_money"] = {"note": "skipped (fast mode)"}
-    return result
+    return compute_decision(symbol, skip_smart_money=True)
 
 
 def main():

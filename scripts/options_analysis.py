@@ -52,16 +52,23 @@ def get_options_pcr(symbol):
 
 
 def get_unusual_options(symbol):
-
-    data = _futu_call("get_financial_unusual", code=symbol, time_range=7, analysis_dimensions=[], language_id=0)
-
-    if data:
-
-        content = data.get("data", {}).get("content", "")
-
-        return content if content else "No unusual activity"
-
-    return "No unusual activity"
+    try:
+        from futu import RET_OK
+        ctx = get_futu_context()
+        if ctx is None:
+            return "unavailable"
+        ret, data = ctx.get_financial_unusual(
+            code=symbol, time_range=7,
+            analysis_dimensions=[], language_id=0
+        )
+        if ret == RET_OK and data is not None:
+            if isinstance(data, dict):
+                content = data.get("data", {}).get("content", "")
+                return content if content else "unavailable"
+            return "unavailable"
+    except Exception as e:
+        print(f"[options] get_unusual_options error: {e}", file=sys.stderr)
+    return "unavailable"
 
 
 
