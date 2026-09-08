@@ -83,7 +83,7 @@ def merge_and_rank(smart_result, hot_result, top_n=10):
     return candidates[:top_n]
 
 
-def run_full_analysis(symbol, timeframe="1d"):
+def run_full_analysis(symbol, timeframe="1d", smart_money_data=None):
     from us_stock_analyzer import get_price, get_tech_analysis, get_news
     from news_sentiment import fetch_news, analyze_news, get_sentiment_summary
     from options_analysis import get_futu_iv, get_options_pcr, get_unusual_options
@@ -131,7 +131,7 @@ def run_full_analysis(symbol, timeframe="1d"):
         return {"result": get_earnings_summary(sym)}
 
     def _decision_fn(sym):
-        return {"result": compute_decision_fast(sym)}
+        return {"result": compute_decision_fast(sym, smart_money_data=smart_money_data)}
 
     tasks = [
         ("price", lambda: get_price(symbol)),
@@ -176,7 +176,7 @@ def run_full_analysis(symbol, timeframe="1d"):
     return report
 
 
-def run_analysis_parallel(symbols, max_workers=5):
+def run_analysis_parallel(symbols, max_workers=5, smart_money_data=None):
     results = {}
     errors = {}
     def _worker(sym):
@@ -331,9 +331,11 @@ Examples:
 
     print("Phase 3: Running full analysis on top {} picks...".format(len(candidates)), file=sys.stderr)
     t0 = time.time()
+    all_smart = smart_result.get("data", [])
     analysis_results, errors = run_analysis_parallel(
         [c["symbol"] for c in candidates],
-        max_workers=min(len(candidates), 5)
+        max_workers=min(len(candidates), 5),
+        smart_money_data=all_smart
     )
     analyze_time = round(time.time() - t0, 1)
     print("  Analysis done in {}s  ({} ok, {} errors)".format(analyze_time, len(analysis_results), len(errors)), file=sys.stderr)

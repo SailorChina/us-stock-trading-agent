@@ -24,7 +24,7 @@ def _try_import(module_name, func_name):
         return None
 
 
-def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool = False) -> Dict:
+def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool = False, smart_money_data: list = None) -> Dict:
     """Compute a comprehensive trading decision from all available signals."""
     t0 = time.time()
     result = {
@@ -117,7 +117,10 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
     # 6. Smart Money (weight: 10%)
     if not skip_smart_money:
         try:
-            sm = scan_smart_money(top_n=50, min_score=10)
+            if smart_money_data is not None:
+                sm = smart_money_data
+            else:
+                sm = scan_smart_money(top_n=50, min_score=10)
             sm_score = 50
             for item in sm[:10] if isinstance(sm, list) else []:
                 if item.get("code") == symbol or item.get("symbol") == symbol:
@@ -205,9 +208,9 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
     return result
 
 
-def compute_decision_fast(symbol: str) -> Dict:
+def compute_decision_fast(symbol: str, smart_money_data: list = None) -> Dict:
     """Fast decision without smart money (avoid heavy scan)."""
-    return compute_decision(symbol, skip_smart_money=True)
+    return compute_decision(symbol, skip_smart_money=True, smart_money_data=smart_money_data)
 
 
 def main():
