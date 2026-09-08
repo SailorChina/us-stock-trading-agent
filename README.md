@@ -18,6 +18,7 @@
 | **风险管理** | `risk_manager.py` | ATR止损、风险收益比、动态仓位、组合诊断 |
 | **市场情绪** | `market_sentiment.py` | VIX分级、指数报价、Magnificent 7 |
 | **市场状态** | `market_regime.py` | Bull/Bear/Volatile/Neutral 自动识别 |
+| **一键选股** | `auto_selector.py` | 聪明钱+热门榜单扫描，并行全量分析，输出 ranked 表格 |
 
 ## 测试状态
 
@@ -280,7 +281,7 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
-- **v3.0.0** - 新增K线形态识别、增强指标(CCI/RVI/StochRSI/WR/OBV背离)、财报分析、六因子决策引擎、180测试全部通过
+- **v3.3.0** - 新增一键选股(auto命令)、auto_selector模块、futu_pool共享连接池优化、10项auto_selector测试 - 新增K线形态识别、增强指标(CCI/RVI/StochRSI/WR/OBV背离)、财报分析、六因子决策引擎、180测试全部通过
 - **v2.8.0** - 修复6个深度BUG：get_price连接池泄漏、get_hot_list Market枚举、scan_stocks ScanConfig未定义、options IV/PCR错误API、market_sentiment连接泄漏
 - **v2.7.0** - 聪明钱筛选器、155项测试、价格实时修正
 - **v1.0.0** - 初始版本：基础分析、回测、风险计算

@@ -8,29 +8,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 from cache_util import retry_call
 
-# Shared Futu connection pool - avoids 128 connection limit
-_futu_ctx_lock = threading.Lock()
-_futu_ctx = None
-
-def _get_futu_ctx():
-    global _futu_ctx
-    with _futu_ctx_lock:
-        if _futu_ctx is None:
-            from futu import OpenQuoteContext
-            _futu_ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
-        return _futu_ctx
-
-def _close_futu_ctx():
-    global _futu_ctx
-    with _futu_ctx_lock:
-        if _futu_ctx is not None:
-            try:
-                _futu_ctx.close()
-            except Exception:
-                pass
-            _futu_ctx = None
-
-
+# Use shared pool from futu_pool to avoid 128 connection limit
+from futu_pool import get_futu_context as _get_futu_ctx
+from futu_pool import close_futu_context as _close_futu_ctx
 
 def _with_futu_context(func, *args, timeout=3):
     result = [None]
@@ -60,7 +40,7 @@ def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
                   "15m": KLType.K_15M, "30m": KLType.K_30M, "60m": KLType.K_60M,
                   "1d": KLType.K_DAY, "1w": KLType.K_WEEK, "1M": KLType.K_MON}
         kl_type = kl_map.get(ktype, KLType.K_DAY)
-        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        ctx = _get_futu_ctx()
         if ctx is None:
             return None
         try:
@@ -95,7 +75,7 @@ def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
 def get_price(symbol):
     try:
         from futu import OpenQuoteContext
-        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        ctx = _get_futu_ctx()
         if ctx is None:
             return None
         try:
@@ -124,7 +104,7 @@ def get_price(symbol):
 def get_premarket_hot(top=20):
     try:
         from futu import OpenQuoteContext
-        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        ctx = _get_futu_ctx()
         if ctx is None:
             return []
         try:
@@ -153,7 +133,7 @@ def get_premarket_hot(top=20):
 def get_hot_list(market="US", top=20):
     try:
         from futu import OpenQuoteContext, Market
-        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        ctx = _get_futu_ctx()
         if ctx is None:
             return []
         try:
@@ -554,7 +534,7 @@ def get_hot_list_futu(top=30):
         return []
     try:
         from futu import OpenQuoteContext
-        ctx = _with_futu_context(_get_futu_ctx, timeout=3)
+        ctx = _get_futu_ctx()
         if ctx is None:
             return []
         try:

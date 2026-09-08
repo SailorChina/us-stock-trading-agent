@@ -40,13 +40,14 @@ def scan_smart_money(top_n=15, min_score=20):
         print("Smart Money Scanner: Futu OpenD not available, returning empty", file=sys.stderr)
         return []
 
-    from futu import OpenQuoteContext, RET_OK
+    from futu_pool import get_futu_context, close_futu_context, RET_OK
+    import pandas as pd
 
     print(f"Smart Money Scanner {datetime.now().strftime('%Y-%m-%d %H:%M')}", file=sys.stderr)
     print(f"Scanning {len(SMART_UNIVERSE)} stocks...", file=sys.stderr)
 
     results = []
-    ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+    ctx = get_futu_context()
 
     try:
         # 1. Fetch short selling data once
@@ -165,11 +166,11 @@ def detect_volume_surge(symbol, num_bars=20):
 
 
 def get_top_brokers(symbol):
-    from futu import OpenQuoteContext, RET_OK
+    from futu_pool import get_futu_context, RET_OK
     _r = [None]; _e = [None]
     def _run():
         try:
-            ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            ctx = get_futu_context()
             ret, result = ctx.get_top_ten_buy_sell_brokers(symbol)
             if ret == RET_OK and result is not None:
                 df = result[1] if isinstance(result, tuple) else result
@@ -181,14 +182,8 @@ def get_top_brokers(symbol):
                         "top_sellers": sells["broker"].head(3).tolist() if len(sells) > 0 else [],
                         "net_flow": float(df["net_flow"].sum()) if "net_flow" in df.columns else 0,
                     }
-
         except Exception as ex:
             _e[0] = ex
-        finally:
-            try:
-                ctx.close()
-            except Exception:
-                pass
     _t = threading.Thread(target=_run, daemon=True)
     _t.start()
     _t.join(timeout=3)

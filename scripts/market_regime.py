@@ -18,11 +18,12 @@ def get_regime():
         result["status"] = "futu_unavailable"
         return result
     
-    # Threaded with 3s timeout
+    # Threaded with 3s timeout using shared pool
     _r = [None]; _e = [None]
     def _run():
         try:
-            ctx = OpenQuoteContext(host="127.0.0.1", port=11111)
+            from futu_pool import get_futu_context, RET_OK
+            ctx = get_futu_context()
             ret_vix, df_vix = ctx.get_stock_quote(["US.VIX"])
             vix_val = 0
             if ret_vix == RET_OK and df_vix is not None and len(df_vix) > 0:
@@ -42,7 +43,6 @@ def get_regime():
                 "regime": regime,
                 "confidence": get_confidence(vix_val, spx_chg),
             }
-            ctx.close()
         except Exception as ex:
             _e[0] = ex
     _t = threading.Thread(target=_run, daemon=True)

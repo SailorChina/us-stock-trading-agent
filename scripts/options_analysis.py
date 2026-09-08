@@ -5,100 +5,17 @@
 import json, sys, argparse, time, threading
 
 from datetime import datetime
+from futu_pool import get_futu_context, RET_OK
 
 
 
-_futu_ctx = None
-
-
-
-def _get_futu_ctx():
-    global _futu_ctx
-    if _futu_ctx is not None:
-        return _futu_ctx
-    result = [None]
-    error = [None]
-    def _create():
-        try:
-            from futu import OpenQuoteContext
-            ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
-            
-            result[0] = ctx
-        except Exception as e:
-            error[0] = e
-    t = threading.Thread(target=_create, daemon=True)
-    t.start()
-    t.join(timeout=3)
-    if t.is_alive():
-        print('[options_analysis] timeout', file=sys.stderr)
-        return None
-    if error[0]:
-        print('[options_analysis] error:', error[0], file=sys.stderr)
-        return None
-    _futu_ctx = result[0]
-    return _futu_ctx
-
-
-
-
-def _futu_call(func_name, *args, **kwargs):
-
-    """Make a Futu API call with retry (3 attempts, 1s delay)."""
-
-    for attempt in range(2):
-
-        try:
-
-            ctx = _get_futu_ctx()
-
-            func = getattr(ctx, func_name)
-
-            ret, data = func(*args, **kwargs)
-
-            if ret == RET_OK:
-
-                return data
-
-            return None
-
-        except Exception as e:
-
-            if attempt < 2:
-
-                time.sleep(0.5)
-
-            else:
-
-                return None
-
-    return None
-
-
-
-def _close_futu_ctx():
-
-    """Close shared Futu context."""
-
-    global _futu_ctx
-
-    if _futu_ctx is not None:
-
-        try:
-
-            _futu_ctx.close()
-
-        except Exception:
-
-            pass
-
-        _futu_ctx = None
 
 
 
 def get_futu_iv(symbol):
     try:
         from futu import RET_OK
-        ctx = _get_futu_ctx()
+        ctx = get_futu_context()
         if ctx is None:
             return None
         ret, data = ctx.get_option_underlying_overview([symbol])
@@ -120,7 +37,7 @@ def get_futu_iv(symbol):
 def get_options_pcr(symbol):
     try:
         from futu import RET_OK
-        ctx = _get_futu_ctx()
+        ctx = get_futu_context()
         if ctx is None:
             return None
         ret, data = ctx.get_option_underlying_overview([symbol])
@@ -224,7 +141,7 @@ def main():
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-    _close_futu_ctx()
+
 
 
 

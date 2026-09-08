@@ -6,6 +6,9 @@ import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
+# Re-export RET_OK for compatibility
+RET_OK = 0
+
 _ctx = None
 _conn_key = ("127.0.0.1", 11111)
 

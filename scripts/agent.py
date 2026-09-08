@@ -13,6 +13,7 @@ try:
     from options_analysis import get_futu_iv, get_options_pcr, get_unusual_options
     from watchlist import load_watchlist, add_stock, remove_stock
     from smart_money_screener import scan_smart_money
+    from auto_selector import merge_and_rank, scan_smart, scan_hot, run_analysis_parallel, format_table
     from candlestick_patterns import get_latest_patterns, pattern_score
     from enhanced_indicators import enhanced_signal_score
     from earnings_analyzer import get_earnings_summary, earnings_score
@@ -178,6 +179,15 @@ def run_quick_signal(symbol):
         return {"symbol": symbol, "error": str(e)}
 
 
+def _futu_available(timeout=2):
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", 11111), timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="US Stock Trading Agent v2",
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -190,13 +200,15 @@ Examples:
   python agent.py checklist                  # Pre-market check
   python agent.py report NVDA                # Quick report
 """)
-    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot", "divergence", "candlestick", "earnings", "decision", "ml-predict", "ml-backtest"],
+    parser.add_argument("command", choices=["analyze", "signal", "top", "scan", "watchlist", "checklist", "report", "smart_money", "hot", "divergence", "candlestick", "earnings", "decision", "ml-predict", "ml-backtest", "auto"],
                        help="Command to run")
     parser.add_argument("symbol", nargs="?", help="Stock symbol (e.g., NVDA, US.NVDA)")
     parser.add_argument("--timeframe", default="1d")
     parser.add_argument("--output", default=None)
     parser.add_argument("--json", action="store_true", help="Raw JSON output")
     parser.add_argument("--verbose", action="store_true", help="Show detailed output")
+    parser.add_argument("--top", type=int, default=5, help="Number of candidates for auto command")
+    parser.add_argument("--min", type=int, default=15, dest="min_score", help="Min score for auto command")
     args = parser.parse_args()
     
     if not MOD_OK:
@@ -325,7 +337,25 @@ Examples:
         from ml_predictor import backtest_ml
         result = backtest_ml(symbol)
         output = json.dumps({"symbol": symbol, "result": result, "generated_at": datetime.now().isoformat()}, ensure_ascii=False, indent=2, default=str)
-    if args.output:
+    elif args.command == "auto":
+        if not _futu_available():
+            print("ERROR: Futu OpenD not available", file=sys.stderr)
+            sys.exit(1)
+        print("Auto command: scanning smart money + hot list...", file=sys.stderr)
+        smart_result = scan_smart(top_n=30, min_score=args.min_score)
+        hot_result = scan_hot(top_n=30)
+        candidates = merge_and_rank(smart_result, hot_result, top_n=args.top)
+        if not candidates:
+            print("No candidates found.", file=sys.stderr)
+            sys.exit(0)
+        print("Running full analysis on {} picks...".format(len(candidates)), file=sys.stderr)
+        analysis_results, errors = run_analysis_parallel([c["symbol"] for c in candidates], max_workers=min(len(candidates), 5))
+        if args.json:
+            output = json.dumps({"candidates": candidates, "analysis": analysis_results, "errors": errors}, ensure_ascii=False, indent=2, default=str)
+        else:
+            table = format_table(candidates, analysis_results, errors)
+            output = table
+    elif args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output)
         print(f"Saved: {args.output}", file=sys.stderr)
