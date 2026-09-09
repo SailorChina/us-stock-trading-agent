@@ -23,7 +23,7 @@ def get_futu_iv(symbol):
             row = data.iloc[0]
             iv = row.get("iv", 0) if "iv" in row else 0
             return float(iv) if iv else None
-        ret2, data2 = ctx.get_quote_snapshot([symbol])
+        ret2, data2 = ctx.get_market_snapshot([symbol])
         if ret2 == RET_OK and data2 is not None and len(data2) > 0:
             row2 = data2.iloc[0]
             iv = row2.get("opt_iv", 0) if "opt_iv" in row2 else 0
