@@ -1,0 +1,23 @@
+{
+  "name": "US liquid large/mid caps (curated seed)",
+  "description": "Starting universe for the daily stock picker. Liquidity and membership are re-filtered at scan time from real prices; edit this list freely.",
+  "symbols": [
+    "US.AAPL","US.MSFT","US.NVDA","US.GOOGL","US.AMZN","US.META","US.TSLA",
+    "US.AVGO","US.ORCL","US.AMD","US.CRM","US.ADBE","US.NFLX","US.INTC",
+    "US.QCOM","US.TXN","US.AMAT","US.MU","US.MRVL","US.PLTR","US.SNOW",
+    "US.NET","US.DDOG","US.CRWD","US.PANW","US.NOW","US.ANET","US.SHOP",
+    "US.JPM","US.BAC","US.WFC","US.GS","US.MS","US.C","US.V","US.MA",
+    "US.AXP","US.BLK","US.SCHW","US.UNH","US.LLY","US.JNJ","US.PFE",
+    "US.MRK","US.ABBV","US.AMGN","US.TMO","US.DHR","US.ISRG","US.MDT",
+    "US.WMT","US.COST","US.PG","US.KO","US.PEP","US.MCD","US.SBUX",
+    "US.NKE","US.HD","US.LOW","US.TGT","US.CMG","US.DIS","US.LULU","US.TJX",
+    "US.XOM","US.CVX","US.COP","US.SLB","US.CAT","US.DE","US.HON","US.BA",
+    "US.GE","US.RTX","US.LMT","US.UBER","US.T","US.VZ","US.TMUS","US.CL",
+    "US.EL","US.MMC","US.ADP","US.INTU","US.FISV","US.ADI","US.KLAC",
+    "US.LRCX","US.MCHP","US.NXPI","US.WDAY","US.TEAM","US.ZS","US.MDB",
+    "US.DAL","US.UNP","US.PYPL","US.SQ","US.PLD",
+    "US.AMT","US.CCI","US.EQIX","US.MCO","US.SPOT","US.RBLX",
+    "US.ABNB","US.DASH","US.COIN","US.MSTR","US.SNPS","US.CDNS",
+    "US.CBRE","US.SYK","US.VRTX","US.REGN","US.GILD","US.BIIB"
+  ]
+}
