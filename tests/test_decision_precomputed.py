@@ -109,11 +109,11 @@ def test_empty_patterns_do_not_crash(no_network):
 
 
 @pytest.mark.parametrize("score,expected", [
-    (90, "STRONG_BUY"),   # 90*.3 + 90*.2 + 90*.15 + 90*.15 + 70*.1 = 79.0
-    (50, "BUY"),          # 47.0
-    (35, "HOLD"),         # 35.0
-    (25, "SELL"),         # 27.0
-    (15, "STRONG_SELL"),  # 19.0
+    (90, "STRONG_BUY"),
+    (50, "BUY"),
+    (35, "HOLD"),
+    (25, "SELL"),
+    (15, "STRONG_SELL"),
 ])
 def test_decision_threshold_bands(monkeypatch, score, expected):
     """Composite -> decision mapping uses the 70/45/35/25 bands."""
@@ -131,11 +131,11 @@ def test_decision_threshold_bands(monkeypatch, score, expected):
         "regime": {"regime": "bull"},
         "price": PRICE,
     })
-    # Composite is a weight-normalised average: with smart money skipped the
-    # attempted weight is 90 (not 100), so the raw weighted sum must be
-    # rescaled by 100/90. Previously the engine just summed the weighted
-    # scores, which made `--fast` runs systematically ~5 points lower.
-    assert r["decision"]["composite_score"] == pytest.approx((score * 0.8 + 7.0) / 0.9, 0.1)
+    # Composite is a weight-normalised average over AVAILABLE weight. With
+    # smart money skipped the weights are 35+10+5+25+0 = 75, and every scored
+    # factor shares the same value, so the composite reduces to that value.
+    # Regime carries weight 0 — it is a gate, not a score component.
+    assert r["decision"]["composite_score"] == pytest.approx(score, 0.1)
     assert r["decision"]["decision"] == expected
 
 
@@ -239,9 +239,9 @@ def test_failed_factor_is_absent_not_bearish(monkeypatch):
     })
     d = r["decision"]
     assert "technical" in r["data_quality"]["missing_factors"]
-    # remaining weight 20+15+15+10 = 60
+    # remaining weight 10 + 5 + 25 + 0(regime) = 40
     assert d["composite_score"] == pytest.approx(
-        (90 * 20 + 90 * 15 + 90 * 15 + 70 * 10) / 60, 0.1)
+        (90 * 10 + 90 * 5 + 90 * 25) / 40, 0.1)
     assert d["composite_score"] > 80, "an outage must not read as bearish"
     assert d["action"] == "BUY"
 
@@ -263,14 +263,14 @@ def test_composite_is_weight_normalised(monkeypatch):
         regime_data={"regime": "bull"},
         price_data=PRICE,
     )
-    r_full = _fast(**base)                      # smart money present -> weight 100
+    r_full = _fast(**base)                      # smart money present -> weight 90
     assert r_full["decision"]["composite_score"] == pytest.approx(
-        (72 * 30 + 65 * 20 + 50 * 15 + 80 * 15 + 70 * 10 + 71 * 10) / 100, 0.1)
+        (72 * 35 + 65 * 10 + 50 * 5 + 80 * 25 + 71 * 15) / 90, 0.1)
 
     r_skip = de.compute_decision_fast("US.NVDA", smart_money_data=None, **base)
     assert r_skip["decision"]["composite_score"] == pytest.approx(
-        (72 * 30 + 65 * 20 + 50 * 15 + 80 * 15 + 70 * 10) / 90, 0.1)
-    assert r_skip["data_quality"]["available_weight"] == 90
+        (72 * 35 + 65 * 10 + 50 * 5 + 80 * 25) / 75, 0.1)
+    assert r_skip["data_quality"]["available_weight"] == 75
 
 
 def test_sell_decision_gets_short_trade_plan(monkeypatch):
@@ -339,3 +339,84 @@ def test_no_usable_data_holds_instead_of_guessing(monkeypatch):
     assert d["composite_score"] == pytest.approx(50.0, 0.1)
     assert d["confidence"] <= 20
     assert len(r["data_quality"]["missing_factors"]) == 5
+
+
+# --------------------------------------------------------------------------
+# v3.4.0 — regime gate: whether you are exposed beats which name you pick
+# --------------------------------------------------------------------------
+
+def _pin(monkeypatch, score):
+    """Pin the two derived factors so the composite is exactly `score`."""
+    monkeypatch.setattr(de, "pattern_score",
+                        lambda p: {"score": score, "signal": "neutral"})
+    monkeypatch.setattr(de, "earnings_score",
+                        lambda e, s: {"score": score, "signal": "neutral",
+                                      "reasons": []})
+
+
+def _precomputed(score, regime="bull"):
+    """Every factor pinned to `score`, with a trade plan present."""
+    return {
+        "tech": {"status": "ok", "data": {"score": score, "rating": "Hold",
+                                          "trade_plan": {"atr": 5.5}}},
+        "enhanced": {"result": {"score": score, "rating": "neutral", "reasons": []}},
+        "candlestick": {"patterns": [{"type": "Hammer", "direction": "bullish"}]},
+        "earnings": {"result": {"status": "ok", "financials": {}}},
+        "regime": {"regime": regime},
+        "price": PRICE,
+    }
+
+
+def test_regime_gate_blocks_longs_in_bear(monkeypatch):
+    """A bear regime must suppress long entries, not merely shave points off."""
+    _pin(monkeypatch, 80)
+    r = de.compute_decision("US.NVDA", skip_smart_money=True,
+                            precomputed=_precomputed(80, "bear"))
+    d = r["decision"]
+    assert d["regime_gate"]["applied"] is True
+    assert d["regime_gate"]["blocked_decision"] == "STRONG_BUY"
+    assert d["action"] == "HOLD"
+    assert d["trade_plan"].get("note", "").startswith("suppressed")
+
+
+def test_regime_gate_blocks_longs_in_volatile(monkeypatch):
+    _pin(monkeypatch, 80)
+    r = de.compute_decision("US.NVDA", skip_smart_money=True,
+                            precomputed=_precomputed(80, "volatile"))
+    assert r["decision"]["regime_gate"]["applied"] is True
+    assert r["decision"]["action"] == "HOLD"
+
+
+def test_regime_gate_allows_longs_in_bull(monkeypatch):
+    _pin(monkeypatch, 80)
+    r = de.compute_decision("US.NVDA", skip_smart_money=True,
+                            precomputed=_precomputed(80, "bull"))
+    d = r["decision"]
+    assert d["regime_gate"]["applied"] is False
+    assert d["action"] == "BUY"
+
+
+def test_regime_gate_does_not_block_shorts(monkeypatch):
+    """Falling markets are what shorts are for — the gate must not touch them."""
+    _pin(monkeypatch, 10)
+    r = de.compute_decision("US.NVDA", skip_smart_money=True,
+                            precomputed=_precomputed(10, "bear"))
+    d = r["decision"]
+    assert d["action"] == "SELL"
+    assert d["regime_gate"]["applied"] is False
+    assert d["trade_plan"]["side"] == "short"
+
+
+def test_apply_regime_gate_unit():
+    """Direct check of the gate's own logic."""
+    d = {"decision": "BUY", "action": "BUY"}
+    de.apply_regime_gate(d, {"regime": "neutral"})
+    assert d["action"] == "BUY" and d["regime_gate"]["applied"] is False
+
+    d = {"decision": "SELL", "action": "SELL"}
+    de.apply_regime_gate(d, {"regime": "bear"})
+    assert d["action"] == "SELL", "shorts must survive the gate"
+
+    d = {"decision": "BUY", "action": "BUY"}
+    de.apply_regime_gate(d, {})
+    assert d["action"] == "BUY", "unknown regime must not silently block"

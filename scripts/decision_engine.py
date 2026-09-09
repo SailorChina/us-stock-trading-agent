@@ -14,6 +14,27 @@ from earnings_analyzer import get_earnings_summary, earnings_score
 from market_regime import get_regime
 from smart_money_screener import scan_smart_money
 
+# Factor weights, deliberately NOT equal and deliberately NOT six.
+#
+# The old 30/20/15 split pretended technical / enhanced / candlestick were
+# three independent dimensions. They are not: CCI, RVI, StochRSI and Williams
+# %R are the same momentum signal in different algebra, so weighting them
+# separately counted one opinion three times and manufactured false
+# confirmation. Candlestick patterns also carry the weakest replicated
+# evidence of anything here. Money was moved to the two factors that actually
+# carry independent information (fundamentals and flow).
+FACTOR_WEIGHTS = {
+    "technical": 35,
+    "enhanced": 10,      # same momentum signal as technical - confirmation only
+    "candlestick": 5,    # weakest evidence; kept at a token weight
+    "earnings": 25,      # genuinely independent information set
+    "smart_money": 15,   # flow, not price
+    "regime": 0,         # a GATE, not a score - see apply_regime_gate
+}
+
+# Regimes in which new long exposure is refused outright.
+REGIME_GATE = {"bear", "volatile"}
+
 
 def _try_import(module_name, func_name):
     """Safely try to import a function, return None on failure."""
@@ -37,9 +58,36 @@ def _absent(weight: int, err: str = None) -> Dict:
     return f
 
 
+def apply_regime_gate(decision: Dict, regime: Dict) -> Dict:
+    """Refuse new longs when the market regime is hostile.
+
+    Regime used to be just another 10% score component, so a bear market cost
+    roughly 5 points of composite — nowhere near enough to keep you out. For
+    an equity long book, WHETHER you are exposed dominates WHICH name you
+    pick, so regime belongs on the gate rather than in the sum.
+
+    Shorts are left alone: falling markets are what they are for.
+    """
+    state = (regime or {}).get("regime", "unknown")
+    gated = state in REGIME_GATE and decision.get("action") == "BUY"
+    original = decision.get("decision")
+    if gated:
+        decision["decision"] = "HOLD"
+        decision["action"] = "HOLD"
+        decision["regime_gate_note"] = (
+            f"long suppressed by regime gate ({state}) — no new long entries")
+    decision["regime_gate"] = {
+        "regime": state,
+        "applied": gated,
+        "blocked_decision": original if gated else None,
+    }
+    return decision
+
+
 def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool = False, smart_money_data: list = None, precomputed: dict = None) -> Dict:
     """Compute a comprehensive trading decision from all available signals."""
     t0 = time.time()
+    W = FACTOR_WEIGHTS
     result = {
         "symbol": symbol,
         "generated_at": datetime.now().isoformat(),
@@ -51,8 +99,9 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
     pc = precomputed or {}
     tech_data = {}        # kept for downstream trade-plan reuse
     tech_precomputed = False
+    regime_state: Dict = {}
 
-    # 1. Technical Analysis (weight: 30%)
+    # 1. Technical Analysis
     try:
         _pc_tech = pc.get("tech")
         if isinstance(_pc_tech, dict) and isinstance(_pc_tech.get("data"), dict) \
@@ -67,16 +116,16 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
             result["factors"]["technical"] = {
                 "score": tech_data.get("score", 50),
                 "rating": tech_data.get("rating", "Hold"),
-                "weight": 30,
-                "weighted_score": tech_data.get("score", 50) * 0.30,
+                "weight": W["technical"],
+                "weighted_score": tech_data.get("score", 50) * W["technical"] / 100.0,
                 "available": True,
             }
         else:
-            result["factors"]["technical"] = _absent(30)
+            result["factors"]["technical"] = _absent(W["technical"])
     except Exception as e:
-        result["factors"]["technical"] = _absent(30, str(e))
+        result["factors"]["technical"] = _absent(W["technical"], str(e))
 
-    # 2. Enhanced Indicators (weight: 20%)
+    # 2. Enhanced Indicators (largely redundant with technical — confirmation only)
     try:
         enh = None
         _pc_enh = pc.get("enhanced")
@@ -92,20 +141,20 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
         if enh is None:
             # No K-line -> factor absent. Do NOT fabricate a neutral 50:
             # that would silently pull the composite towards "hold".
-            result["factors"]["enhanced"] = _absent(20)
+            result["factors"]["enhanced"] = _absent(W["enhanced"])
         else:
             result["factors"]["enhanced"] = {
                 "score": enh.get("score", 50),
                 "rating": enh.get("rating", "neutral"),
                 "reasons": enh.get("reasons", []),
-                "weight": 20,
-                "weighted_score": enh.get("score", 50) * 0.20,
+                "weight": W["enhanced"],
+                "weighted_score": enh.get("score", 50) * W["enhanced"] / 100.0,
                 "available": True,
             }
     except Exception as e:
-        result["factors"]["enhanced"] = _absent(20, str(e))
+        result["factors"]["enhanced"] = _absent(W["enhanced"], str(e))
 
-    # 3. Candlestick Patterns (weight: 15%)
+    # 3. Candlestick Patterns (token weight — weakest replicated evidence)
     try:
         patterns = None
         _pc_candle = pc.get("candlestick")
@@ -122,21 +171,21 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
             if df is not None:
                 patterns = get_latest_patterns(df, 5) or []
         if patterns is None:
-            result["factors"]["candlestick"] = _absent(15)
+            result["factors"]["candlestick"] = _absent(W["candlestick"])
         else:
             pscore = pattern_score(patterns) if patterns else {"score": 50, "signal": "neutral"}
             result["factors"]["candlestick"] = {
                 "score": pscore.get("score", 50),
                 "signal": pscore.get("signal", "neutral"),
                 "patterns": [p.get("type", "?") for p in patterns],
-                "weight": 15,
-                "weighted_score": pscore.get("score", 50) * 0.15,
+                "weight": W["candlestick"],
+                "weighted_score": pscore.get("score", 50) * W["candlestick"] / 100.0,
                 "available": True,
             }
     except Exception as e:
-        result["factors"]["candlestick"] = _absent(15, str(e))
+        result["factors"]["candlestick"] = _absent(W["candlestick"], str(e))
 
-    # 4. Earnings/Analyst (weight: 15%)
+    # 4. Earnings/Analyst
     try:
         earnings = None
         _pc_earn = pc.get("earnings")
@@ -155,16 +204,16 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                 "reasons": escore["reasons"],
                 "pe_ratio": earnings.get("financials", {}).get("pe_ratio"),
                 "analyst_target": earnings.get("financials", {}).get("target_mean_price"),
-                "weight": 15,
-                "weighted_score": escore["score"] * 0.15,
+                "weight": W["earnings"],
+                "weighted_score": escore["score"] * W["earnings"] / 100.0,
                 "available": True,
             }
         else:
-            result["factors"]["earnings"] = _absent(15)
+            result["factors"]["earnings"] = _absent(W["earnings"])
     except Exception as e:
-        result["factors"]["earnings"] = _absent(15, str(e))
+        result["factors"]["earnings"] = _absent(W["earnings"], str(e))
 
-    # 5. Market Regime (weight: 10%)
+    # 5. Market Regime — recorded for the gate, carries no score weight
     try:
         regime = None
         _pc_reg = pc.get("regime")
@@ -173,6 +222,7 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
         else:
             regime = get_regime()
         if isinstance(regime, dict) and regime.get("regime"):
+            regime_state = regime
             regime_score = {"bull": 70, "neutral": 50, "volatile": 40, "bear": 25}.get(
                 regime.get("regime", "neutral"), 50
             )
@@ -181,16 +231,16 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                 "score": regime_score,
                 "vix": regime.get("vix", 0),
                 "confidence": regime.get("confidence", 0),
-                "weight": 10,
-                "weighted_score": regime_score * 0.10,
+                "weight": W["regime"],
+                "weighted_score": 0.0,
                 "available": True,
             }
         else:
-            result["factors"]["regime"] = _absent(10)
+            result["factors"]["regime"] = _absent(W["regime"])
     except Exception as e:
-        result["factors"]["regime"] = _absent(10, str(e))
+        result["factors"]["regime"] = _absent(W["regime"], str(e))
 
-    # 6. Smart Money (weight: 10%)
+    # 6. Smart Money
     if not skip_smart_money:
         try:
             if smart_money_data is not None:
@@ -204,12 +254,12 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                     break
             result["factors"]["smart_money"] = {
                 "score": sm_score,
-                "weight": 10,
-                "weighted_score": sm_score * 0.10,
+                "weight": W["smart_money"],
+                "weighted_score": sm_score * W["smart_money"] / 100.0,
                 "available": True,
             }
         except Exception as e:
-            result["factors"]["smart_money"] = _absent(10, str(e))
+            result["factors"]["smart_money"] = _absent(W["smart_money"], str(e))
 
     # ---- composite: availability-aware and weight-normalised --------------
     # Only factors that actually produced data go into the score. A failed
@@ -232,7 +282,10 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
     # Was previously a deterministic transform of the composite score, i.e.
     # decoration. Real confidence = do the factors agree, is the data
     # complete, and is the score actually away from neutral?
-    scores = [v.get("score", 50) for v in usable.values() if v.get("score") is not None]
+    # Zero-weight factors (the regime gate) carry no vote, so they must not
+    # inflate the agreement measure either.
+    scores = [v.get("score", 50) for v in usable.values()
+              if v.get("score") is not None and v.get("weight", 0) > 0]
     if len(scores) >= 2:
         spread = max(scores) - min(scores)
         mean_s = sum(scores) / len(scores)
@@ -284,6 +337,20 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
     current_price = price.get("latest_price", 0) if isinstance(price, dict) else 0
     change_pct = price.get("change_pct", 0) if isinstance(price, dict) else 0
 
+    result["decision"] = {
+        "composite_score": round(composite, 1),
+        "decision": decision,
+        "action": action,
+        "current_price": current_price,
+        "change_pct": change_pct,
+    }
+
+    # The regime gate runs BEFORE the trade plan is built, so a suppressed
+    # long can never hand you a long entry/target to act on.
+    apply_regime_gate(result["decision"], regime_state)
+    action = result["decision"]["action"]
+    gated = bool(result["decision"].get("regime_gate", {}).get("applied"))
+
     # Trade plan from tech analysis (reuse tech_data when available)
     # NOTE: direction must match the decision — a SELL gets a SHORT plan
     # (stop above entry, targets below), not a recycled long plan.
@@ -321,28 +388,24 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                 "atr": atr,
                 "current_price": current_price,
             }
-            if action == "HOLD":
+            if gated:
+                trade_plan["note"] = "suppressed by regime gate - not an entry"
+            elif action == "HOLD":
                 trade_plan["note"] = "reference only - action is HOLD"
     except Exception:
         pass
 
-    result["decision"] = {
-        "composite_score": round(composite, 1),
-        "decision": decision,
-        "action": action,
-        "current_price": current_price,
-        "change_pct": change_pct,
-        "trade_plan": trade_plan,
-        "confidence": confidence,
-        "confidence_components": {
-            "agreement": round(agreement, 3),
-            "completeness": round(completeness, 3),
-            "conviction": round(conviction, 3),
-        },
-        "factor_spread": round(spread, 1),
-        "conflict": conflict,
-        "insufficient_data": insufficient,
+    result["decision"]["trade_plan"] = trade_plan
+    result["decision"]["confidence"] = confidence
+    result["decision"]["confidence_components"] = {
+        "agreement": round(agreement, 3),
+        "completeness": round(completeness, 3),
+        "conviction": round(conviction, 3),
     }
+    result["decision"]["factor_spread"] = round(spread, 1)
+    result["decision"]["conflict"] = conflict
+    result["decision"]["insufficient_data"] = insufficient
+
     result["data_quality"] = {
         "available_weight": total_weight,
         "attempted_weight": attempted_weight,
