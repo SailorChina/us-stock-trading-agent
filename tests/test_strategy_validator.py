@@ -259,7 +259,7 @@ def test_cross_section_detects_planted_signal(monkeypatch):
     syms = [f"US.S{i:02d}" for i in range(20)]
     scores = {s: 20 + i * 3 for i, s in enumerate(syms)}
 
-    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1):
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1, scorer=None):
         n = len(df)
         base = scores[symbol]
         out = []
@@ -285,7 +285,7 @@ def test_cross_section_uses_non_overlapping_windows(monkeypatch):
     """step must equal horizon, or forward windows overlap and n is inflated."""
     seen = {}
 
-    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1):
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1, scorer=None):
         seen["horizon"], seen["step"] = horizon, step
         return [{"bar": 60 + i * 5, "date": f"d{i}", "score": 50.0 + i,
                  "fwd_ret": 0.01} for i in range(20)]
@@ -306,7 +306,7 @@ def test_cross_section_insufficient_universe():
 
 def test_cross_section_insufficient_periods_verdict(monkeypatch):
     """Very few rebalance dates must NOT be reported as a finding."""
-    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1):
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1, scorer=None):
         return [{"bar": 60, "date": "d1", "score": 60.0, "fwd_ret": 0.02},
                 {"bar": 65, "date": "d2", "score": 40.0, "fwd_ret": -0.02}]
 
@@ -315,3 +315,45 @@ def test_cross_section_insufficient_periods_verdict(monkeypatch):
     rep = sv.validate_cross_section(syms, horizon=5, bars=200,
                                     fetcher=lambda s, tf, b: _df(200))
     assert rep["verdict"] == "insufficient_periods"
+
+
+# --- style scorer plumbing (daily_pick styles share the validator) ---------
+
+def test_score_history_accepts_custom_scorer():
+    """The same pure scorer used live must be usable for validation."""
+    df = _df(200)
+    rows = sv.score_history("US.X", df, horizon=5, window_bars=120, step=5,
+                            scorer=lambda w: {"score": 61.0})
+    assert rows
+    assert all(r["score"] == 61.0 for r in rows)
+
+
+def test_cross_section_rejects_unknown_style():
+    rep = sv.validate_cross_section(["US.A", "US.B"], style="not_real",
+                                    fetcher=lambda s, tf, b: _df(200))
+    assert rep["status"] == "unknown_style"
+    assert "momentum" in rep["known_styles"]
+
+
+def test_cross_section_validates_a_style(monkeypatch):
+    """A planted style ranker must be measurable through the same path."""
+    syms = [f"US.S{i:02d}" for i in range(14)]
+    base = {s: 20 + i * 5 for i, s in enumerate(syms)}
+
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60,
+                     step=1, scorer=None):
+        n = len(df)
+        out = []
+        for t in range(60, n - horizon, step):
+            sc = base[symbol] + (t % 2) * 0.2
+            out.append({"bar": t, "date": f"d{t}", "score": sc,
+                        "fwd_ret": (sc - 50) / 1000.0})
+        return out
+
+    monkeypatch.setattr(sv, "score_history", fake_history)
+    rep = sv.validate_cross_section(syms, horizon=5, bars=200, style="momentum",
+                                    fetcher=lambda s, tf, b: _df(200))
+    assert rep["status"] == "ok"
+    assert rep["style"] == "momentum"
+    assert rep["information_coefficient"]["mean_ic"] > 0.9
+    assert rep["verdict"] == "predictive"

@@ -61,10 +61,14 @@ def _spearman(x: List[float], y: List[float]) -> Optional[float]:
 
 
 def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 120,
-                  min_bars: int = 60, step: int = 1) -> List[Dict]:
+                  min_bars: int = 60, step: int = 1,
+                  scorer=None) -> List[Dict]:
     """Score every bar using only past data, and attach the forward return.
 
-    Returns a list of {"date", "score", "fwd_ret"} dicts.
+    `scorer` is an optional callable(df) -> {"score": 0-100}; it lets the
+    cross-sectional validator measure a *specific style* (momentum /
+    reversal / quality from stock_selector) instead of the whole composite.
+    Default: the historical composite of the decision engine's technical block.
     """
     from tech_engine import signal_from_df
     from enhanced_indicators import enhanced_signal_score
@@ -81,22 +85,28 @@ def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 120,
         lo = max(0, t + 1 - window_bars)
         window = df.iloc[lo:t + 1].copy()
 
-        try:
-            tech = signal_from_df(window)
-            if tech.get("status") != "ok":
+        if scorer is not None:
+            try:
+                composite = scorer(window).get("score")
+            except Exception:
                 continue
-            tech_score = tech["data"]["score"]
-
-            enh = enhanced_signal_score(window) or {}
-            enh_score = enh.get("score", 50)
-
-            pats = get_latest_patterns(window, 5) or []
-            pscore = pattern_score(pats) if pats else {"score": 50, "signal": "neutral"}
-            candle_score = pscore.get("score", 50)
-        except Exception:
-            continue
-
-        composite = (tech_score * TECH_W + enh_score * ENH_W + candle_score * CANDLE_W) / BLOCK_W
+            if composite is None:
+                continue
+        else:
+            try:
+                tech = signal_from_df(window)
+                if tech.get("status") != "ok":
+                    continue
+                tech_score = tech["data"]["score"]
+                enh = enhanced_signal_score(window) or {}
+                enh_score = enh.get("score", 50)
+                pats = get_latest_patterns(window, 5) or []
+                pscore = pattern_score(pats) if pats else {"score": 50, "signal": "neutral"}
+                candle_score = pscore.get("score", 50)
+            except Exception:
+                continue
+            composite = (tech_score * TECH_W + enh_score * ENH_W
+                         + candle_score * CANDLE_W) / BLOCK_W
         fwd = (closes[t + horizon] - closes[t]) / closes[t] if closes[t] else 0.0
 
         rows.append({
@@ -104,9 +114,6 @@ def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 120,
             "date": str(stamps[t])[:10],
             "score": round(float(composite), 2),
             "fwd_ret": float(fwd),
-            "tech": tech_score,
-            "enhanced": enh_score,
-            "candlestick": candle_score,
         })
     return rows
 
@@ -307,16 +314,31 @@ def validate_cross_section(symbols: Optional[List[str]] = None, horizon: int = 1
                            bars: int = 250, quantile: float = 0.2,
                            window_bars: int = 120, min_names: int = 10,
                            limit: Optional[int] = None,
-                           fetcher=None) -> Dict:
+                           fetcher=None, style: str = "composite") -> Dict:
     """Cross-sectional validation: rank many symbols per date, not one over time.
 
     This is the cure for the sample-size problem in `validate_symbol`. Each
     rebalance date contributes one IC observation computed across the whole
     universe, and rebalances are spaced `horizon` bars apart so forward
     windows never overlap.
+
+    `style` selects WHICH ranker is being validated: "composite" (the decision
+    engine's technical block) or a daily_pick style ("momentum" / "reversal" /
+    "quality"). The live picker and the validator share the exact same scoring
+    function, so a factor cannot be added to the scan without being measured.
     """
     from tech_engine import fetch_kline
     fetch = fetcher or fetch_kline
+
+    scorer = None
+    if style != "composite":
+        from stock_selector import STYLES
+        scorer = STYLES.get(style)
+        if scorer is None:
+            return {"status": "unknown_style", "style": style,
+                    "known_styles": sorted(STYLES),
+                    "verdict": "unknown_style",
+                    "detail": f"unknown style '{style}'"}
 
     syms = list(symbols or DEFAULT_UNIVERSE)
     if limit:
@@ -324,6 +346,7 @@ def validate_cross_section(symbols: Optional[List[str]] = None, horizon: int = 1
 
     report = {
         "mode": "cross_sectional",
+        "style": style,
         "generated_at": datetime.now().isoformat(),
         "horizon_bars": horizon,
         "requested_bars": bars,
@@ -343,7 +366,7 @@ def validate_cross_section(symbols: Optional[List[str]] = None, horizon: int = 1
             failed.append(f"{sym}: insufficient history")
             continue
         rows = score_history(sym, df, horizon=horizon, step=horizon,
-                             window_bars=window_bars)
+                             window_bars=window_bars, scorer=scorer)
         if rows:
             per_symbol[sym] = {r["date"]: r for r in rows}
 
@@ -482,6 +505,8 @@ def main():
     parser.add_argument("--bars", type=int, default=500, help="history length to fetch")
     parser.add_argument("--threshold", type=float, default=60.0, help="entry score threshold")
     parser.add_argument("--quantile", type=float, default=0.2, help="top quantile to hold")
+    parser.add_argument("--style", default="composite",
+                        help="ranker to validate: composite|momentum|reversal|quality")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
@@ -489,7 +514,7 @@ def main():
         syms = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
         report = validate_cross_section(syms, horizon=max(2, args.horizon),
                                         bars=args.bars, quantile=args.quantile,
-                                        limit=args.limit)
+                                        limit=args.limit, style=args.style)
     else:
         report = validate_symbol(args.symbol, horizon=args.horizon,
                                  bars=args.bars, threshold=args.threshold)
