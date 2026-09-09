@@ -4,6 +4,7 @@ __pycache__/
 *.json
 data/
 _*
+.workbuddy/
 tests_*.txt
 1.*
 =

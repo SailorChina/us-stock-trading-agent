@@ -4,9 +4,92 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
+
+
+def _patch_futu_log_dir():
+    """Redirect the futu SDK's log directory into the workspace.
+
+    futu's FTLog hardcodes its log path to ``%APPDATA%\\com.futunn.FutuOpenD\\Log``
+    (futu/common/ft_logger.py). When that write is blocked by a sandboxed /
+    restricted environment, the SDK dies silently with no traceback, which shows up
+    as network tests hanging forever instead of failing.
+
+    Two details drive the implementation:
+      * ``ft_logger`` runs ``logger = FTLog()`` at *module import* time, and the
+        TimedRotatingFileHandler opens the log file right there — so the redirect
+        must happen before ``futu`` is imported, not after (the instance is a
+        singleton guarded by ``hasattr``, so it can never be re-pointed later).
+      * The path comes from ``os.getenv("appdata")``, so we temporarily shim
+        ``os.getenv`` for the duration of the import only, then restore it. This
+        avoids mutating APPDATA, which would break site-packages resolution.
+
+    Runs in pytest_configure, i.e. before any test module imports futu.
+    """
+    if "futu.common.ft_logger" in sys.modules:
+        return  # already imported: too late to redirect
+    try:
+        log_dir = Path(__file__).parent.parent / "data" / "_futu_log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    original_getenv = os.getenv
+
+    def _getenv(key, default=None):
+        if isinstance(key, str) and key.lower() == "appdata":
+            return str(log_dir)
+        return original_getenv(key, default)
+
+    os.getenv = _getenv
+    try:
+        import futu.common.ft_logger  # noqa: F401  (import is the side effect)
+    except Exception:
+        pass  # futu missing: network tests will fail on their own terms
+    finally:
+        os.getenv = original_getenv
+
+
+def _make_futu_threads_daemon():
+    """Make futu's internal threads daemons.
+
+    ``futu/common/callback_executor.py`` starts its worker thread *without*
+    setDaemon (unlike network_manager, which does call it), so any live
+    OpenQuoteContext keeps a non-daemon thread alive and the interpreter never
+    exits after pytest prints its summary — the suite looks like it hangs forever
+    when it actually finished minutes ago.
+
+    futu exposes an official switch for exactly this
+    (``SysConfig.set_all_thread_daemon``), which is far cleaner than force-killing
+    the process. Must run before any context is created.
+    """
+    try:
+        from futu.common.sys_config import SysConfig
+
+        SysConfig.set_all_thread_daemon(True)
+    except Exception:
+        pass
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "network: mark test as requiring network access")
+    _patch_futu_log_dir()
+    _make_futu_threads_daemon()
 
+
+
+def pytest_unconfigure(config):
+    """Release the shared futu connection when the session ends.
+
+    With daemon threads enabled this is no longer what makes the process exit, but
+    it still matters: OpenD caps concurrent connections (~128), and a session that
+    leaks one per run will eventually starve later runs.
+    """
+    try:
+        import futu_pool
+
+        futu_pool.close_futu_context()
+    except Exception:
+        pass
 
 
 @pytest.fixture

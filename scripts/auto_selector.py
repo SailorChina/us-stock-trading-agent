@@ -139,7 +139,18 @@ def run_full_analysis(symbol, timeframe="1d", smart_money_data=None, price_map=N
         return {"result": get_earnings_summary(sym)}
 
     def _decision_fn(sym):
-        return {"result": compute_decision_fast(sym, smart_money_data=smart_money_data)}
+        """Reuse everything already computed above — no extra futu API calls."""
+        return {"result": compute_decision_fast(
+            sym,
+            smart_money_data=smart_money_data,
+            tech_data=results.get("tech"),
+            enhanced_data=results.get("enhanced"),
+            candle_data=results.get("candlestick"),
+            earnings_data=results.get("earnings"),
+            regime_data=results.get("regime"),
+            price_data=results.get("price") if results.get("price") else cached_price,
+            timeframe=timeframe,
+        )}
 
     tasks = [
         ("price", lambda: cached_price if cached_price else get_price(symbol)),
@@ -149,8 +160,9 @@ def run_full_analysis(symbol, timeframe="1d", smart_money_data=None, price_map=N
         ("candlestick", lambda: _candlestick_fn(symbol)),
         ("enhanced", lambda: _enhanced_fn(symbol)),
         ("earnings", lambda: _earnings_fn(symbol)),
-        ("decision", lambda: _decision_fn(symbol)),
+        # regime must run BEFORE decision so it can be reused
         ("regime", get_regime),
+        ("decision", lambda: _decision_fn(symbol)),
     ]
     # Sequential execution to avoid shared futu context thread-safety issues
     for name, fn in tasks:
@@ -188,8 +200,12 @@ def run_analysis_parallel(symbols, max_workers=5, smart_money_data=None, price_m
     results = {}
     errors = {}
     def _worker(sym):
-        try: results[sym] = run_full_analysis(sym, price_map=price_map, tech_cache=tech_cache)
-        except Exception as e: errors[sym] = str(e)
+        try:
+            results[sym] = run_full_analysis(sym, timeframe="1d",
+                                             smart_money_data=smart_money_data,
+                                             price_map=price_map, tech_cache=tech_cache)
+        except Exception as e:
+            errors[sym] = str(e)
     # Sequential execution for thread safety with shared futu context
     for sym in symbols:
         _worker(sym)
