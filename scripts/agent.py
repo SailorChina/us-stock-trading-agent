@@ -264,6 +264,7 @@ Examples:
     elif args.command == 'top':
         n = int(args.symbol) if args.symbol else 10
         result = scan_smart_money(top_n=n, min_score=20)
+        output = json.dumps({"generated_at": datetime.now().isoformat(), "results": result}, ensure_ascii=False, indent=2, default=str)
     elif args.command == 'scan':
         from tech_engine import get_price, generate_signal
         syms = (args.symbol.split(',') if args.symbol else ['NVDA','TSLA','AAPL','MSFT','AMZN'])
@@ -278,6 +279,7 @@ Examples:
                     'rating': t['data']['rating'], 'score': t['data']['score'],
                     'strength': t['data'].get('signal_strength', 50)})
         result = {'generated_at': datetime.now().isoformat(), 'results': results}
+        output = json.dumps(result, ensure_ascii=False, indent=2, default=str)
     elif args.command == 'smart_money':
         result = scan_smart_money(top_n=15, min_score=20)
         output = json.dumps({'generated_at': datetime.now().isoformat(), 'results': result}, ensure_ascii=False, indent=2, default=str)
@@ -355,7 +357,7 @@ Examples:
         else:
             table = format_table(candidates, analysis_results, errors)
             output = table
-    elif args.output:
+    if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output)
         print(f"Saved: {args.output}", file=sys.stderr)

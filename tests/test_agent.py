@@ -84,3 +84,61 @@ def test_run_full_analysis_returns_dict():
     assert "modules" in result
     assert "generated_at" in result
     assert "elapsed_sec" in result
+
+
+def test_command_top_outputs_json(monkeypatch, capsys):
+    """Regression: `top` must emit JSON to stdout (was silently empty)."""
+    import agent
+    import json
+    monkeypatch.setattr(
+        agent, "scan_smart_money",
+        lambda top_n=10, min_score=20: {"status": "ok", "count": 1,
+                                        "data": [{"symbol": "US.NVDA", "score": 80}]},
+    )
+    monkeypatch.setattr(sys, "argv", ["agent.py", "top", "5"])
+    agent.main()
+    out = capsys.readouterr().out
+    assert out.strip(), "top command produced no stdout"
+    data = json.loads(out)
+    assert data["results"]["data"][0]["symbol"] == "US.NVDA"
+
+
+def test_command_scan_outputs_json(monkeypatch, capsys):
+    """Regression: `scan` must emit JSON to stdout (was silently empty)."""
+    import agent
+    import json
+    import tech_engine
+    monkeypatch.setattr(tech_engine, "get_price", lambda s: {"latest_price": 100})
+    monkeypatch.setattr(
+        tech_engine, "generate_signal",
+        lambda *a, **k: {"status": "ok", "data": {"rating": "Buy", "score": 70,
+                                                  "signal_strength": 60}},
+    )
+    monkeypatch.setattr(sys, "argv", ["agent.py", "scan", "NVDA,AAPL"])
+    agent.main()
+    out = capsys.readouterr().out
+    assert out.strip(), "scan command produced no stdout"
+    data = json.loads(out)
+    assert len(data["results"]) == 2
+    assert data["results"][0]["symbol"] == "US.NVDA"
+
+
+def test_command_signal_outputs_json(monkeypatch, capsys):
+    """Regression: CLI must actually print `output` (the final print branch
+    used to be unreachable because it was joined to the command dispatch chain)."""
+    import agent
+    import json
+    monkeypatch.setattr(
+        agent, "get_tech_analysis",
+        lambda *a, **k: {"data": {"rating": "Buy", "score": 70, "trade_plan": {},
+                                  "indicators": {"atr": 2}, "signals": [],
+                                  "resonance": {"alignment": ""}}},
+    )
+    monkeypatch.setattr(agent, "get_price", lambda *a, **k: {"latest_price": 100})
+    monkeypatch.setattr(sys, "argv", ["agent.py", "signal", "NVDA"])
+    agent.main()
+    out = capsys.readouterr().out
+    assert out.strip(), "signal command produced no stdout"
+    data = json.loads(out)
+    assert data["symbol"] == "US.NVDA"
+    assert data["action"] in ("BUY", "SELL", "HOLD")
