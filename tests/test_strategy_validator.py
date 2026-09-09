@@ -357,3 +357,83 @@ def test_cross_section_validates_a_style(monkeypatch):
     assert rep["style"] == "momentum"
     assert rep["information_coefficient"]["mean_ic"] > 0.9
     assert rep["verdict"] == "predictive"
+
+
+# --- event study (rare-signal styles: reversal) ----------------------------
+
+def _dip_recovery_df(n=240, base=100.0, seed=9, dip_every=24, dip_gap=60):
+    """Steady uptrend punctuated by 3% dips that mean-revert quickly.
+
+    Signal days (the dip bar) are followed by stronger-than-normal returns,
+    so an honest event study must find a positive per-symbol excess.
+    """
+    rng = np.random.default_rng(seed)
+    c = [float(base)]
+    for i in range(1, n):
+        prev = c[-1]
+        if i >= dip_gap and (i - dip_gap) % dip_every == 0:
+            c.append(prev * 0.97)                     # dip bar
+        elif 1 <= (i - dip_gap) % dip_every <= 4:
+            c.append(prev * 1.010)                    # recovery: strong days
+        else:
+            c.append(prev * (1.0 + rng.normal(0.002, 0.004)))
+    close = np.asarray(c)
+    high = close * 1.005
+    low = close * 0.995
+    open_ = np.concatenate([[close[0]], close[:-1]])
+    volume = np.full(n, 5_000_000.0)
+    return pd.DataFrame({
+        "time_key": pd.date_range("2023-01-01", periods=n, freq="D"),
+        "open": open_, "high": high, "low": low, "close": close, "volume": volume,
+    })
+
+
+def _dip_detector():
+    """Detect the dip bar: close dropped ~3% vs the prior bar."""
+    def _score(window):
+        c = window["close"].values
+        hit = (len(c) >= 2 and c[-1] < c[-2] * 0.98)
+        return {"score": 100.0 if hit else 0.0}
+    return _score
+
+
+def test_event_study_finds_planted_signal(monkeypatch):
+    syms = [f"US.D{i}" for i in range(6)]
+    monkeypatch.setattr(sv, "score_history", lambda *a, **k: None)  # unused here
+    rep = sv.validate_events(
+        syms, style="reversal", threshold=50.0, horizon=10, bars=240,
+        fetcher=lambda s, tf, b: _dip_recovery_df(seed=10 + abs(hash(s)) % 7),
+        scorer=_dip_detector())
+    assert rep["status"] == "ok"
+    assert rep["symbols_active"] == len(syms)
+    assert rep["signals"] >= len(syms)
+    assert rep["mean_excess_pct"] > 0
+    assert rep["t_stat"] is not None and rep["t_stat"] > 2.0, rep
+    assert rep["verdict"] == "predictive"
+    assert all(p["excess"] > 0 for p in rep["per_symbol"]), \
+        "every symbol's signal days should beat its own normal days"
+
+
+def test_event_study_signals_do_not_overlap():
+    """Dense dips with a 10-bar horizon must not be counted more than once."""
+    df = _dip_recovery_df(n=300, dip_every=12, dip_gap=60)   # a dip every 12 bars
+    rep = sv.validate_events(["US.D0"], style="reversal", threshold=50.0,
+                             horizon=10, bars=300, min_active=1,
+                             fetcher=lambda s, tf, b: df, scorer=_dip_detector())
+    max_non_overlap = (300 - 60) // 10 + 1
+    assert rep["signals"] <= max_non_overlap, \
+        f"overlapping signals counted: {rep['signals']} > {max_non_overlap}"
+
+
+def test_event_study_insufficient_signals():
+    rep = sv.validate_events(["US.A", "US.B"], style="reversal", threshold=50.0,
+                             bars=200, fetcher=lambda s, tf, b: _df(200),
+                             scorer=lambda w: {"score": 0.0})
+    assert rep["verdict"] == "insufficient_signals"
+
+
+def test_event_study_rejects_unknown_style():
+    rep = sv.validate_events(["US.A"], style="nope", bars=200,
+                             fetcher=lambda s, tf, b: _df(200))
+    assert rep["status"] == "unknown_style"
+    assert "reversal" in rep["known_styles"]

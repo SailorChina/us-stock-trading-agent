@@ -310,6 +310,133 @@ def _cross_verdict(ic: Dict, port: Dict) -> Dict:
                        f"top-quantile excess {port.get('excess_pct')}% vs equal-weight universe")}
 
 
+def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal",
+                    threshold: float = 20.0, horizon: int = 10,
+                    bars: int = 300, window_bars: int = 120, min_bars: int = 60,
+                    limit: Optional[int] = None, fetcher=None,
+                    scorer=None, min_active: int = 5) -> Dict:
+    """EVENT-STUDY validation for rare-signal styles such as reversal.
+
+    Ranking styles (momentum, quality) are validated cross-sectionally, but a
+    rare-signal style cannot be: on a typical day almost every name scores 0,
+    so a per-date rank correlation is degenerate. The right question is not
+    "does higher score beat lower score?" but "after a signal fires, is the
+    forward return better than that name's own normal days?"
+
+    Per symbol: walk the history bar by bar; when score >= threshold, record
+    the forward return and step over the next `horizon` bars (no overlapping
+    exposure — otherwise the same move is counted repeatedly). Every other
+    bar contributes to that symbol's own baseline. Per-symbol excess =
+    mean(signal days) - mean(normal days), then a one-sample t-test on the
+    per-symbol excesses (symbols are the independent units, so one hot name
+    cannot fabricate significance).
+    """
+    from tech_engine import fetch_kline
+    from stock_selector import STYLES
+    fetch = fetcher or fetch_kline
+    score_fn = scorer if scorer is not None else STYLES.get(style)
+    if score_fn is None:
+        return {"status": "unknown_style", "style": style,
+                "known_styles": sorted(STYLES),
+                "verdict": "unknown_style", "detail": f"unknown style '{style}'"}
+
+    syms = list(symbols or DEFAULT_UNIVERSE)
+    if limit:
+        syms = syms[:limit]
+
+    per_symbol = []
+    failed = []
+    for sym in syms:
+        try:
+            df = fetch(sym, "1d", bars)
+        except Exception as exc:
+            failed.append(f"{sym}: {exc}")
+            continue
+        if df is None or len(df) < min_bars + horizon + 1:
+            failed.append(f"{sym}: insufficient history")
+            continue
+        closes = df["close"].values
+        n = len(closes)
+
+        events, normal = [], []
+        t = min_bars
+        while t <= n - 1 - horizon:
+            fwd = (closes[t + horizon] - closes[t]) / closes[t] if closes[t] else 0.0
+            window = df.iloc[max(0, t + 1 - window_bars):t + 1].copy()
+            try:
+                hit = (score_fn(window) or {}).get("score", 0.0) >= threshold
+            except Exception:
+                hit = False
+            if hit:
+                events.append(float(fwd))
+                t += horizon                      # no overlapping exposure
+            else:
+                normal.append(float(fwd))
+                t += 1
+        if events:
+            base = float(np.mean(normal)) if normal else 0.0
+            per_symbol.append({"symbol": sym, "n_events": len(events),
+                               "mean_event_ret": float(np.mean(events)),
+                               "baseline_ret": base,
+                               "excess": float(np.mean(events)) - base})
+
+    report = {
+        "mode": "event_study",
+        "style": style,
+        "threshold": threshold,
+        "horizon_bars": horizon,
+        "generated_at": datetime.now().isoformat(),
+        "universe_size": len(syms),
+        "symbols_active": len(per_symbol),
+        "status": "ok",
+    }
+    if failed:
+        report["fetch_failures"] = failed[:15]
+
+    if len(per_symbol) < min_active:
+        report["verdict"] = "insufficient_signals"
+        report["detail"] = (f"only {len(per_symbol)} symbols produced >=1 signal "
+                            f"in {len(syms)} (need >= {min_active}) - nothing to conclude")
+        return report
+
+    n_events = sum(p["n_events"] for p in per_symbol)
+    excesses = np.asarray([p["excess"] for p in per_symbol], dtype=float)
+    mean_excess = float(excesses.mean())
+    se = float(excesses.std(ddof=1)) / np.sqrt(len(excesses))
+    t_stat = mean_excess / se if se > 0 else None
+    overall_event = float(np.mean([p["mean_event_ret"] for p in per_symbol]))
+    overall_base = float(np.mean([p["baseline_ret"] for p in per_symbol]))
+
+    report.update({
+        "signals": int(n_events),
+        "events_per_symbol_avg": round(n_events / len(per_symbol), 1),
+        "mean_event_ret_pct": round(overall_event * 100, 3),
+        "baseline_ret_pct": round(overall_base * 100, 3),
+        "mean_excess_pct": round(mean_excess * 100, 3),
+        "t_stat": round(t_stat, 3) if t_stat is not None else None,
+        "significant": bool(t_stat is not None and abs(t_stat) > 2.0),
+        "per_symbol": per_symbol,
+    })
+
+    if t_stat is None:
+        verdict, detail = "degenerate", "no variance in per-symbol excess"
+    elif abs(t_stat) <= 2.0:
+        verdict, detail = ("no_evidence",
+                           f"per-symbol excess {mean_excess*100:.2f}% "
+                           f"(t={t_stat:.2f}) indistinguishable from zero")
+    elif t_stat > 2.0:
+        verdict, detail = ("predictive",
+                           f"signal days beat that name's normal days by "
+                           f"{mean_excess*100:.2f}% per {horizon}-bar hold (t={t_stat:.2f})")
+    else:
+        verdict, detail = ("inverse",
+                           f"signal days UNDERperform normal days by "
+                           f"{abs(mean_excess)*100:.2f}% per {horizon}-bar hold (t={t_stat:.2f})")
+    report["verdict"] = verdict
+    report["detail"] = detail
+    return report
+
+
 def validate_cross_section(symbols: Optional[List[str]] = None, horizon: int = 10,
                            bars: int = 250, quantile: float = 0.2,
                            window_bars: int = 120, min_names: int = 10,
@@ -495,8 +622,8 @@ def validate_symbol(symbol: str, horizon: int = 5, bars: int = 500,
 
 def main():
     parser = argparse.ArgumentParser(description="Strategy Validator")
-    parser.add_argument("--mode", default="single", choices=["single", "cross"],
-                        help="single = one symbol over time; cross = rank a universe per date")
+    parser.add_argument("--mode", default="single", choices=["single", "cross", "events"],
+                        help="single/cross rank a universe; events = event study for rare-signal styles")
     parser.add_argument("--symbol", default="US.NVDA")
     parser.add_argument("--symbols", default=None,
                         help="comma separated universe for --mode cross")
@@ -515,6 +642,11 @@ def main():
         report = validate_cross_section(syms, horizon=max(2, args.horizon),
                                         bars=args.bars, quantile=args.quantile,
                                         limit=args.limit, style=args.style)
+    elif args.mode == "events":
+        syms = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
+        report = validate_events(syms, style=args.style, threshold=args.threshold,
+                                 horizon=max(2, args.horizon), bars=args.bars,
+                                 limit=args.limit)
     else:
         report = validate_symbol(args.symbol, horizon=args.horizon,
                                  bars=args.bars, threshold=args.threshold)
