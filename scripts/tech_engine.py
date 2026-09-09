@@ -329,7 +329,21 @@ def generate_signal(symbol, timeframe="1d", num_bars=60):
     if df is None or len(df) < 20:
         return {"module": "tech", "status": "error",
                 "error": f"Insufficient data for {symbol} (need >=20 bars, got {len(df) if df is not None else 0})"}
-    price = get_price(symbol)
+    return signal_from_df(df, symbol=symbol, price=get_price(symbol))
+
+
+def signal_from_df(df, symbol=None, price=None):
+    """Score an OHLCV DataFrame — pure, no network access.
+
+    Split out of generate_signal so that history can be evaluated without
+    look-ahead: feed it `df[:t+1]` and the score reflects only what was
+    knowable at bar t. `price` is an optional live quote dict; when omitted
+    the last close is used, which is the only correct choice when scoring
+    a historical bar.
+    """
+    if df is None or len(df) < 20:
+        return {"module": "tech", "status": "error",
+                "error": f"need >=20 bars, got {len(df) if df is not None else 0}"}
     ma = calc_ma(df)
     ema = calc_ema(df)
     macd = calc_macd(df)
