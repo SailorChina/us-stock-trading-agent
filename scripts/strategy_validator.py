@@ -16,15 +16,22 @@ Design rules that matter:
     on 40 samples is noise, not alpha.
 
 Usage:
+    # single symbol, scored over time (few effective samples - see note below)
     python scripts/strategy_validator.py --symbol US.NVDA --horizon 5 --bars 500
+
+    # cross-sectional: rank a universe each date (the mode that has power)
+    python scripts/strategy_validator.py --mode cross --horizon 10 --bars 250 --limit 40
 """
 import argparse
 import json
 import math
 import os
+import statistics
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _SCRIPT_DIR)
@@ -217,6 +224,199 @@ def _verdict(ic_info: Dict, buckets: List[Dict], sim: Dict) -> Dict:
             "top_minus_bottom_pct": round(spread, 2)}
 
 
+# A default cross-sectional universe — liquid US large caps across sectors.
+# Cross-sectional validation needs BREADTH: one symbol scored on overlapping
+# 5-day windows yields ~37 independent observations, while ranking 40 symbols
+# on 25 non-overlapping dates yields ~1000 pairs and a meaningful t-statistic.
+DEFAULT_UNIVERSE = [
+    "US.NVDA", "US.AAPL", "US.MSFT", "US.GOOGL", "US.AMZN", "US.META",
+    "US.TSLA", "US.AVGO", "US.JPM", "US.V", "US.UNH", "US.XOM", "US.LLY",
+    "US.MA", "US.COST", "US.HD", "US.PG", "US.JNJ", "US.ABBV", "US.ORCL",
+    "US.CRM", "US.AMD", "US.ADBE", "US.NFLX", "US.PEP", "US.KO", "US.WMT",
+    "US.MRK", "US.BAC", "US.CVS", "US.INTC", "US.QCOM", "US.TXN", "US.AMGN",
+    "US.HON", "US.SBUX", "US.NKE", "US.MCD", "US.GS", "US.CAT",
+]
+
+
+def newey_west_se(x: List[float], lags: Optional[int] = None) -> Optional[float]:
+    """HAC (Newey-West) standard error of the MEAN of a series.
+
+    IC observations are autocorrelated (adjacent periods share market regime),
+    so the naive SE is far too small — which is exactly how people talk
+    themselves into seeing alpha. This widens it back out.
+    """
+    arr = np.asarray(x, dtype=float)
+    n = len(arr)
+    if n < 3:
+        return None
+    if lags is None:
+        lags = max(1, int(4 * (n / 100.0) ** (2.0 / 9.0)))
+    lags = min(lags, n - 1)
+    d = arr - arr.mean()
+    s = float((d * d).mean())                      # gamma_0
+    for l in range(1, lags + 1):
+        gamma_l = float((d[l:] * d[:-l]).mean())
+        s += 2.0 * (1.0 - l / (lags + 1.0)) * gamma_l
+    return math.sqrt(max(s, 1e-12) / n)
+
+
+def ic_stats(ics: List[float], lags: Optional[int] = None) -> Dict:
+    """Mean IC with both naive and autocorrelation-robust t-statistics."""
+    n = len(ics)
+    if n < 3:
+        return {"n_periods": n, "mean_ic": None, "significant": False,
+                "note": "too few periods"}
+    mean_ic = float(np.mean(ics))
+    std_ic = float(np.std(ics, ddof=1))
+    se_nw = newey_west_se(ics, lags)
+    se_naive = std_ic / math.sqrt(n)
+    t_nw = mean_ic / se_nw if se_nw else None
+    return {
+        "n_periods": n,
+        "mean_ic": round(mean_ic, 4),
+        "std_ic": round(std_ic, 4),
+        "icir": round(mean_ic / std_ic, 4) if std_ic else None,
+        "se_newey_west": round(se_nw, 4) if se_nw else None,
+        "t_stat_newey_west": round(t_nw, 3) if t_nw is not None else None,
+        "t_stat_naive": round(mean_ic / se_naive, 3) if se_naive else None,
+        "significant": bool(t_nw is not None and abs(t_nw) > 1.96),
+        "note": "naive SE understates risk when IC is autocorrelated",
+    }
+
+
+def _cross_verdict(ic: Dict, port: Dict) -> Dict:
+    n = ic.get("n_periods", 0)
+    if n < 12:
+        return {"verdict": "insufficient_periods",
+                "detail": f"only {n} rebalance periods - the IC t-stat is not meaningful yet"}
+    mic = ic.get("mean_ic")
+    if not ic.get("significant"):
+        return {"verdict": "no_evidence",
+                "detail": (f"mean IC={mic}, Newey-West t={ic.get('t_stat_newey_west')} "
+                           f"- indistinguishable from zero")}
+    if mic is not None and mic < 0:
+        return {"verdict": "inverse",
+                "detail": (f"mean IC={mic} is significantly negative - buying the "
+                           f"highest-scoring names loses money")}
+    return {"verdict": "predictive",
+            "detail": (f"mean IC={mic} with Newey-West t={ic.get('t_stat_newey_west')}; "
+                       f"top-quantile excess {port.get('excess_pct')}% vs equal-weight universe")}
+
+
+def validate_cross_section(symbols: Optional[List[str]] = None, horizon: int = 10,
+                           bars: int = 250, quantile: float = 0.2,
+                           window_bars: int = 120, min_names: int = 10,
+                           limit: Optional[int] = None,
+                           fetcher=None) -> Dict:
+    """Cross-sectional validation: rank many symbols per date, not one over time.
+
+    This is the cure for the sample-size problem in `validate_symbol`. Each
+    rebalance date contributes one IC observation computed across the whole
+    universe, and rebalances are spaced `horizon` bars apart so forward
+    windows never overlap.
+    """
+    from tech_engine import fetch_kline
+    fetch = fetcher or fetch_kline
+
+    syms = list(symbols or DEFAULT_UNIVERSE)
+    if limit:
+        syms = syms[:limit]
+
+    report = {
+        "mode": "cross_sectional",
+        "generated_at": datetime.now().isoformat(),
+        "horizon_bars": horizon,
+        "requested_bars": bars,
+        "universe_size": len(syms),
+        "top_quantile": quantile,
+        "status": "ok",
+    }
+
+    per_symbol, failed = {}, []
+    for sym in syms:
+        try:
+            df = fetch(sym, "1d", bars)
+        except Exception as e:
+            failed.append(f"{sym}: {e}")
+            continue
+        if df is None or len(df) < 80:
+            failed.append(f"{sym}: insufficient history")
+            continue
+        rows = score_history(sym, df, horizon=horizon, step=horizon,
+                             window_bars=window_bars)
+        if rows:
+            per_symbol[sym] = {r["date"]: r for r in rows}
+
+    if len(per_symbol) < 2:
+        report["status"] = "insufficient_universe"
+        report["symbols_with_data"] = len(per_symbol)
+        report["fetch_failures"] = failed[:20]
+        report["verdict"] = "insufficient_universe"
+        report["detail"] = "cross-sectional ranking needs at least 2 symbols with history"
+        return report
+
+    counts: Dict[str, int] = {}
+    for m in per_symbol.values():
+        for d in m:
+            counts[d] = counts.get(d, 0) + 1
+    dates = sorted(d for d, c in counts.items() if c >= min_names)
+
+    periods, top_rets, uni_rets = [], [], []
+    for d in dates:
+        pairs = [(m[d]["score"], m[d]["fwd_ret"]) for m in per_symbol.values() if d in m]
+        if len(pairs) < min_names:
+            continue
+        periods.append({"date": d, "n": len(pairs),
+                        "ic": _spearman([p[0] for p in pairs], [p[1] for p in pairs])})
+
+        ranked = sorted(pairs, key=lambda p: p[0], reverse=True)
+        n_top = max(1, int(round(len(ranked) * quantile)))
+        top_rets.append(float(np.mean([r for _, r in ranked[:n_top]])))
+        uni_rets.append(float(np.mean([r for _, r in pairs])))
+
+    if len(periods) < 3:
+        report["status"] = "insufficient_periods"
+        report["periods"] = len(periods)
+        report["verdict"] = "insufficient_periods"
+        report["detail"] = f"only {len(periods)} rebalance periods - nothing to conclude"
+        return report
+
+    stats = ic_stats([p["ic"] for p in periods if p["ic"] is not None])
+    avg_n = float(np.mean([p["n"] for p in periods]))
+
+    equity, e, uni = [], 1.0, 1.0
+    for r in top_rets:
+        e *= (1.0 + r)
+        equity.append(e)
+    for r in uni_rets:
+        uni *= (1.0 + r)
+    top_total, uni_total = (e - 1.0) * 100, (uni - 1.0) * 100
+
+    port = {
+        "top_quantile": quantile,
+        "avg_names_held": max(1, int(round(avg_n * quantile))),
+        "return_pct": round(top_total, 2),
+        "universe_return_pct": round(uni_total, 2),
+        "excess_pct": round(top_total - uni_total, 2),
+        "win_rate_vs_universe": round(
+            sum(1 for a, b in zip(top_rets, uni_rets) if a > b) / len(top_rets), 3),
+        "max_drawdown_pct": round(_max_drawdown(equity) * 100, 2) if equity else 0.0,
+    }
+
+    report.update({
+        "symbols_with_data": len(per_symbol),
+        "periods": len(periods),
+        "avg_names_per_period": round(avg_n, 1),
+        "cross_sectional_pairs": int(sum(p["n"] for p in periods)),
+        "information_coefficient": stats,
+        "portfolio": port,
+    })
+    report.update(_cross_verdict(stats, port))
+    if failed:
+        report["fetch_failures"] = failed[:20]
+    return report
+
+
 def validate_symbol(symbol: str, horizon: int = 5, bars: int = 500,
                     threshold: float = 60.0, window_bars: int = 120) -> Dict:
     """Full walk-forward validation for one symbol."""
@@ -272,15 +472,27 @@ def validate_symbol(symbol: str, horizon: int = 5, bars: int = 500,
 
 def main():
     parser = argparse.ArgumentParser(description="Strategy Validator")
-    parser.add_argument("--symbol", required=True)
+    parser.add_argument("--mode", default="single", choices=["single", "cross"],
+                        help="single = one symbol over time; cross = rank a universe per date")
+    parser.add_argument("--symbol", default="US.NVDA")
+    parser.add_argument("--symbols", default=None,
+                        help="comma separated universe for --mode cross")
+    parser.add_argument("--limit", type=int, default=None, help="cap the universe size")
     parser.add_argument("--horizon", type=int, default=5, help="forward return horizon in bars")
     parser.add_argument("--bars", type=int, default=500, help="history length to fetch")
     parser.add_argument("--threshold", type=float, default=60.0, help="entry score threshold")
+    parser.add_argument("--quantile", type=float, default=0.2, help="top quantile to hold")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
-    report = validate_symbol(args.symbol, horizon=args.horizon,
-                             bars=args.bars, threshold=args.threshold)
+    if args.mode == "cross":
+        syms = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
+        report = validate_cross_section(syms, horizon=max(2, args.horizon),
+                                        bars=args.bars, quantile=args.quantile,
+                                        limit=args.limit)
+    else:
+        report = validate_symbol(args.symbol, horizon=args.horizon,
+                                 bars=args.bars, threshold=args.threshold)
     out = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:

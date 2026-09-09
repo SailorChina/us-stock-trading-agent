@@ -208,3 +208,110 @@ def test_bucket_monotonic_flag(monkeypatch):
     assert sv.bucket_returns(rows) is not None
     means = [b["mean_fwd_ret_pct"] for b in sv.bucket_returns(rows)]
     assert means == sorted(means)
+
+
+# --------------------------------------------------------------------------
+# cross-sectional validation
+# --------------------------------------------------------------------------
+
+def test_newey_west_inflates_se_when_autocorrelated():
+    """An autocorrelated IC series must get a WIDER standard error."""
+    rng = np.random.default_rng(0)
+    x, cur = [], 0.0
+    for _ in range(300):
+        cur = 0.8 * cur + rng.normal(0, 1)
+        x.append(cur)
+    nw = sv.newey_west_se(x)
+    naive = float(np.std(x, ddof=1)) / np.sqrt(len(x))
+    assert nw > naive * 1.5, "HAC should widen the SE under autocorrelation"
+
+
+def test_newey_west_close_to_naive_for_iid():
+    rng = np.random.default_rng(1)
+    x = list(rng.normal(0, 1, 300))
+    nw = sv.newey_west_se(x)
+    naive = float(np.std(x, ddof=1)) / np.sqrt(len(x))
+    assert 0.6 < nw / naive < 1.6
+
+
+def test_ic_stats_significant_on_stable_ic():
+    ics = [0.15 + ((i % 3) - 1) * 0.001 for i in range(40)]
+    st = sv.ic_stats(ics)
+    assert st["mean_ic"] == pytest.approx(0.15, abs=0.01)
+    assert st["significant"] is True
+    assert st["t_stat_newey_west"] > 1.96
+
+
+def test_ic_stats_not_significant_on_zero_mean_noise():
+    ics = [0.01 if i % 2 == 0 else -0.01 for i in range(40)]
+    st = sv.ic_stats(ics)
+    assert st["significant"] is False
+
+
+def test_ic_stats_reports_both_t_stats():
+    st = sv.ic_stats([0.12] * 10 + [0.08] * 10)
+    assert st["t_stat_naive"] is not None
+    assert st["t_stat_newey_west"] is not None
+
+
+def test_cross_section_detects_planted_signal(monkeypatch):
+    """When high scores genuinely earn more, cross-sectional IC must show it."""
+    syms = [f"US.S{i:02d}" for i in range(20)]
+    scores = {s: 20 + i * 3 for i, s in enumerate(syms)}
+
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1):
+        n = len(df)
+        base = scores[symbol]
+        out = []
+        for t in range(60, n - horizon, step):
+            sc = base + (t % 3) * 0.1
+            out.append({"bar": t, "date": f"d{t}", "score": sc,
+                        "fwd_ret": (sc - 50) / 1000.0})
+        return out
+
+    monkeypatch.setattr(sv, "score_history", fake_history)
+    rep = sv.validate_cross_section(syms, horizon=5, bars=200, quantile=0.2,
+                                    fetcher=lambda s, tf, b: _df(200, seed=abs(hash(s)) % 1000))
+
+    assert rep["status"] == "ok", rep.get("fetch_failures") or rep
+    assert rep["periods"] >= 12
+    assert rep["information_coefficient"]["mean_ic"] > 0.9
+    assert rep["information_coefficient"]["significant"] is True
+    assert rep["verdict"] == "predictive"
+    assert rep["portfolio"]["excess_pct"] > 0
+
+
+def test_cross_section_uses_non_overlapping_windows(monkeypatch):
+    """step must equal horizon, or forward windows overlap and n is inflated."""
+    seen = {}
+
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1):
+        seen["horizon"], seen["step"] = horizon, step
+        return [{"bar": 60 + i * 5, "date": f"d{i}", "score": 50.0 + i,
+                 "fwd_ret": 0.01} for i in range(20)]
+
+    syms = [f"US.S{i:02d}" for i in range(12)]
+    monkeypatch.setattr(sv, "score_history", fake_history)
+    sv.validate_cross_section(syms, horizon=7, bars=200,
+                              fetcher=lambda s, tf, b: _df(200))
+    assert seen["horizon"] == 7
+    assert seen["step"] == 7
+
+
+def test_cross_section_insufficient_universe():
+    rep = sv.validate_cross_section(["US.A", "US.B"], horizon=5, bars=200,
+                                    fetcher=lambda s, tf, b: None)
+    assert rep["status"] == "insufficient_universe"
+
+
+def test_cross_section_insufficient_periods_verdict(monkeypatch):
+    """Very few rebalance dates must NOT be reported as a finding."""
+    def fake_history(symbol, df, horizon=5, window_bars=120, min_bars=60, step=1):
+        return [{"bar": 60, "date": "d1", "score": 60.0, "fwd_ret": 0.02},
+                {"bar": 65, "date": "d2", "score": 40.0, "fwd_ret": -0.02}]
+
+    syms = [f"US.S{i:02d}" for i in range(12)]
+    monkeypatch.setattr(sv, "score_history", fake_history)
+    rep = sv.validate_cross_section(syms, horizon=5, bars=200,
+                                    fetcher=lambda s, tf, b: _df(200))
+    assert rep["verdict"] == "insufficient_periods"
