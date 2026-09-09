@@ -312,7 +312,7 @@ def _cross_verdict(ic: Dict, port: Dict) -> Dict:
 
 def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal",
                     threshold: float = 20.0, horizon: int = 10,
-                    bars: int = 300, window_bars: int = 120, min_bars: int = 60,
+                    bars: int = 400, window_bars: int = 0, min_bars: int = 60,
                     limit: Optional[int] = None, fetcher=None,
                     scorer=None, min_active: int = 5) -> Dict:
     """EVENT-STUDY validation for rare-signal styles such as reversal.
@@ -322,6 +322,11 @@ def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal"
     so a per-date rank correlation is degenerate. The right question is not
     "does higher score beat lower score?" but "after a signal fires, is the
     forward return better than that name's own normal days?"
+
+    NOTE: the scoring window is ALL history up to bar t (window_bars=0), not a
+    short trailing window — reversal_score requires a real MA200 to know the
+    trend is intact, and a 120-bar window can never produce one, which would
+    silently zero out every day.
 
     Per symbol: walk the history bar by bar; when score >= threshold, record
     the forward return and step over the next `horizon` bars (no overlapping
@@ -362,7 +367,8 @@ def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal"
         t = min_bars
         while t <= n - 1 - horizon:
             fwd = (closes[t + horizon] - closes[t]) / closes[t] if closes[t] else 0.0
-            window = df.iloc[max(0, t + 1 - window_bars):t + 1].copy()
+            lo = 0 if window_bars <= 0 else max(0, t + 1 - window_bars)
+            window = df.iloc[lo:t + 1].copy()
             try:
                 hit = (score_fn(window) or {}).get("score", 0.0) >= threshold
             except Exception:
@@ -630,7 +636,8 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="cap the universe size")
     parser.add_argument("--horizon", type=int, default=5, help="forward return horizon in bars")
     parser.add_argument("--bars", type=int, default=500, help="history length to fetch")
-    parser.add_argument("--threshold", type=float, default=60.0, help="entry score threshold")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="entry score threshold (single: 60; events: 20 by default)")
     parser.add_argument("--quantile", type=float, default=0.2, help="top quantile to hold")
     parser.add_argument("--style", default="composite",
                         help="ranker to validate: composite|momentum|reversal|quality")
@@ -644,12 +651,14 @@ def main():
                                         limit=args.limit, style=args.style)
     elif args.mode == "events":
         syms = [s.strip() for s in args.symbols.split(",")] if args.symbols else None
-        report = validate_events(syms, style=args.style, threshold=args.threshold,
+        report = validate_events(syms, style=args.style,
+                                 threshold=20.0 if args.threshold is None else args.threshold,
                                  horizon=max(2, args.horizon), bars=args.bars,
                                  limit=args.limit)
     else:
         report = validate_symbol(args.symbol, horizon=args.horizon,
-                                 bars=args.bars, threshold=args.threshold)
+                                 bars=args.bars,
+                                 threshold=60.0 if args.threshold is None else args.threshold)
     out = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
