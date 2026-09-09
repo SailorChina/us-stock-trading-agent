@@ -23,9 +23,9 @@
 ## 测试状态
 
 ```
-238 passed (全部通过)
+251 passed (全部通过)
 pytest tests/ -q
-`
+```
 
 | 新增测试文件 | 测试数 | 覆盖模块 |
 ```
@@ -63,6 +63,7 @@ pytest tests/ -q
 | **`test_enhanced_indicators.py`** | **10** | **CCI/RVI/StochRSI/WR/OBV背离** |
 | **`test_earnings_analyzer.py`** | **3** | **财报评分逻辑** |
 | **`test_decision_engine.py`** | **4** | **多因子决策引擎** |
+| `test_decision_precomputed.py` | 13 | 决策引擎 precomputed 复用（离线）+ auto_selector 接线 |
 
 ## 快速使用
 
@@ -281,6 +282,8 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
+- **v3.3.6** - 修复测试套件"跑完不退出"（`tests/conftest.py`）：① futu 日志硬写 `%APPDATA%`，写入被拒时 SDK 静默挂死 —— 在 `import futu` 前临时劫持 `os.getenv`，把日志重定向到 `data/_futu_log`（`ft_logger` 在 import 时即创建单例 handler，事后无法改路径）；② `futu/common/callback_executor.py` 的线程未设 daemon，任何存活的 `OpenQuoteContext` 都会让 pytest 打印完总结后永久挂起 —— 改用官方开关 `SysConfig.set_all_thread_daemon(True)`，并在 `pytest_unconfigure` 关闭共享 context。修复后全量 251 项约 3.5 分钟内正常退出（此前会挂起 30 分钟以上）
+- **v3.3.6** - 修复决策引擎 precomputed 快路径：因子赋值误嵌套在 `else` 分支，导致传入缓存数据时 technical/enhanced/candlestick 三项因子被静默丢弃（综合分失真）；smart_money 改读 `total_score`；决策阈值调整为 70/45/35/25；auto_selector 现在把 tech/enhanced/candlestick/earnings/regime/price 全部复用给决策引擎（regime 调整到 decision 之前执行），并修复 `run_analysis_parallel` 漏传 `smart_money_data` 导致聪明钱因子从不生效的问题；新增 13 项离线回归测试
 - **v3.3.5** - 修复futu API扫描后退化问题：缓存smart money的price/tech/kline数据，analysis阶段直接使用缓存而非重新请求API，所有模块（tech/candlestick/enhanced）现在显示完整数据
 - **v3.3.4** - 修复get_hot_list API参数(['US']->'US')、移除shared ctx.close()防止共享连接中断、analysis改为顺序执行避免线程安全崩溃、238测试全部通过
 - **v3.3.2** - 修复composite score计算错误（除以total_weight改为直接用weighted_score之和）、修复price=0 bug、compute_decision_fast提速15倍(48s→3s)、修复options_analysis._futu_call未定义错误
