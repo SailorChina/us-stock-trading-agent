@@ -15,7 +15,7 @@
 | **期权异动** | `options_analysis.py` | IV隐含波动率、PCR看跌看涨比、异常期权成交 |
 | **财报分析** | `earnings_analyzer.py` | PE/Forward PE、EPS增长、营收增长、分析师目标价 |
 | **决策引擎** | `decision_engine.py` | 六因子综合评分、权重融合、自适应交易计划（多空双向） |
-| **策略验证** | `strategy_validator.py` | 无前视历史回测、横截面排序验证、IC+Newey-West t、分位组单调性、vs 买入持有 |
+| **策略验证** | `strategy_validator.py` | 无前视回测、横截面排序验证、事件研究（稀有信号）、IC+Newey-West t、分位组单调性、vs 买入持有 |
 | **每日选股** | `daily_pick.py` + `stock_selector.py` | 收盘后扫描：momentum/reversal/quality 三层独立排行、regime 门控、流动性过滤、2×ATR 止损 + 波动率目标仓位 |
 | **风险管理** | `risk_manager.py` | ATR止损、风险收益比、动态仓位、组合诊断 |
 | **市场情绪** | `market_sentiment.py` | VIX分级、指数报价、Magnificent 7 |
@@ -25,11 +25,12 @@
 ## 测试状态
 
 ```
-327 passed (全部通过，非沙箱/无文件锁环境)
-326 passed + 1 failed (WorkBuddy 沙箱或本机出现文件锁时：test_cache_util 或
-  test_log_trade 等文件删除/写入类用例随锁状态失败，非代码问题)
+331 passed (全部通过，非沙箱/无文件锁环境)
 pytest tests/ -q
 ```
+
+> 注：WorkBuddy 沙箱或本机文件锁活跃时，个别删除/写入类用例（如
+> test_cache_util、test_log_trade）会随锁状态失败，非代码问题。
 
 ```
 
@@ -68,7 +69,7 @@ pytest tests/ -q
 | **`test_decision_engine.py`** | **4** | **多因子决策引擎** |
 | `test_decision_precomputed.py` | 23 | 决策引擎 precomputed 复用（离线）+ auto_selector 接线 + 打分正确性 + regime 门控 |
 | **`test_ml_predictor_honesty.py`** | **8** | **ML 正确性：跨标模型隔离、scaler 无泄露、val 选模型、基线对比** |
-| **`test_strategy_validator.py`** | **28** | **无前视验证、横截面 IC+Newey-West、分位组、非重叠模拟、风格打分回调** |
+| **`test_strategy_validator.py`** | **33** | **无前视验证、横截面 IC+Newey-West、分位组、非重叠模拟、风格回调、事件研究** |
 | **`test_vol_targeting.py`** | **9** | **波动率目标仓位：vol 高者仓位小、约束生效报告、零波动保护** |
 | **`test_stock_selector.py`** | **11** | **选股因子：趋势/回调低吸/质量的方向性、不接落刀、淘汰低价股** |
 | **`test_daily_pick.py`** | **7** | **每日扫描：三风格排行、regime 门控、流动性过滤、热门池并入、坏数据存活** |
@@ -134,6 +135,9 @@ python scripts/daily_pick.py                       # momentum + reversal + quali
 python scripts/daily_pick.py --style momentum --top 10
 # 单独验证某个风格（live 与验证共用同一打分函数）：
 python scripts/strategy_validator.py --mode cross --style momentum --limit 20
+
+# 事件研究（稀有信号风格如 reversal 的正确验证法：信号日 vs 该股平常日）：
+python scripts/strategy_validator.py --mode events --style reversal --horizon 10 --bars 400 --limit 15
 
 # 新闻情感分析
 python scripts/news_sentiment.py --symbol US.NVDA --size 10
@@ -302,6 +306,7 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
+- **v3.5.1** - 验证器新增**事件研究模式** `--mode events`：reversal 这类"稀有信号"风格无法用横截面 IC 验证（典型一天几乎每只票都是 0 分，排序统计量退化，实测 IC 全 None）。事件研究问对的问题：**信号触发后，未来收益是否好于该股自己的平常日**。逐 symbol 走历史：得分 ≥ 阈值记为信号日并跳过 horizon 根（同一段行情不重复计数），其余日构成该股自身基线；每股超额 = 信号日均值 − 平常日均值，以 **symbol 为独立样本做单样本 t 检验**（一只大牛股造不出显著性）。注意：事件研究的打分窗口是**截至当天的全部历史**（reversal 需要真实 MA200 判定趋势，120 根窗口永远算不出来会静默全 0——踩过并修复）；CLI 阈值按模式取默认（single 60 / events 20）。**实测（15 只流动股、400 根、10 日持有）：10 只票 36 个非重叠信号，信号日 +2.48% vs 平常日 +0.90% → 每股超额 +1.58%，t=1.80（10 个独立样本）——方向偏正但不够显著**，需扩大样本再判。5 项新增测试
 - **v3.5.0** - 按产品目标（每日收盘选股）重构：新增纯因子引擎 `stock_selector.py`（momentum 趋势动量 / reversal 回调低吸 / quality 低波质量 三种**独立**排行——合并成一个综合分会互相抵消）+ 每日扫描命令 `daily_pick.py`（自建流动性池 + futu 热门榜并集，实价重过滤流动性；单只取数带守护线程，坏代码不拖垮整夜任务；regime 为**门控**：bear/volatile 直接输出 NO_NEW_LONGS；每候选附 close / ATR% / 2×ATR 止损 / 波动率目标仓位；输出标注"研究候选非买入保证"）。关键纪律：`strategy_validator.py --mode cross` 新增 `--style composite|momentum|reversal|quality`，**live 选股与验证共用同一打分回调** —— 因子不可能只进实盘不进验证。25 项新增离线测试（含"回调趋势内的刀不接"：无前序上涨时 reversal 必为 0）
 - **v3.4.0** - `strategy_validator.py` 新增**横截面验证** `--mode cross`（有统计功效的模式）：单标的纵向验证重叠窗口把 186 个样本压到 ~37 个独立观测，而检测 IC=0.05 需 ~1500 个 —— `no_evidence` 其实是"还没测出来"。横截面模式改为**每个调仓日对整个股票池打分排序**：调仓日之间间隔 = horizon（前视窗口永不重叠）、每日一个横截面 IC、IC 序列同时给 naive 与 **Newey-West HAC t 统计量**（相邻期共享市场状态，naive 标准误太小正是 alpha 被发明出来的方式）、前 quantile 组合 vs 等权股票池 + 胜率 + 最大回撤。内置 40 只流动性美股默认股票池。**实测（15 只大型股、300 根、10 日、19 期、285 对）：mean IC=-0.1084，NW t=-2.18 显著为负；按分数买前 20% 收益 -19.49% vs 等权 +11.64%，超额 -31.12%，仅 31.6% 期间跑赢 → `inverse`**。即：该技术分在横截面上**奖励已涨上去的名字、其后 10 天倾向回归**——现阶段直接拿它选股是亏钱的（这也印证了把动量簇权重从 65% 降到 50% 的方向）。新增 9 项离线测试
 - **v3.4.0** - `risk_manager.py` 新增**波动率目标仓位** `vol_target_position`：固定百分比仓位在 15% 波动率和 80% 波动率的标的上意味着天差地别的风险；波动率目标按"该仓位实际贡献的组合风险"来定仓位 = target_vol / 已实现年化波动。三重约束（波动率目标 / 硬性最大仓位 / ATR 止损风险上限）逐一列出、报告哪一条实际生效（`capped_by`），而不是默默取最小。默认值按单票场景调优：10% 年化波动贡献、25% 仓位上限、1% ATR 风险。10 项离线测试
