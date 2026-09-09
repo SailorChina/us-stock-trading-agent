@@ -1,9 +1,76 @@
 #!/usr/bin/env python3
-import json, sys, argparse, logging
+import json, sys, argparse, logging, math, statistics
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, Sequence
 
 logger = logging.getLogger(__name__)
+
+
+def annualized_vol(returns: Sequence[float], periods_per_year: int = 252) -> Optional[float]:
+    """Annualised volatility from a series of periodic returns."""
+    if not returns:
+        return None
+    clean = [float(r) for r in returns if r is not None and not math.isnan(float(r))]
+    if len(clean) < 5:
+        return None
+    return statistics.stdev(clean) * math.sqrt(periods_per_year)
+
+
+def vol_target_position(entry_price: float, returns: Sequence[float] = None,
+                        atr: float = None, capital: float = 100000.0,
+                        target_vol_pct: float = 10.0,
+                        max_position_pct: float = 25.0,
+                        max_risk_pct: float = 1.0,
+                        atr_multiplier: float = 2.0) -> dict:
+    """Size a position by VOLATILITY TARGET rather than a fixed percentage.
+
+    "Risk 10% of capital" means wildly different things in a 15%-vol name and
+    an 80%-vol one. Targeting volatility equalises what each position actually
+    contributes to portfolio risk, which is the entire point of sizing.
+
+    Two independent caps are applied and the binding one is reported:
+      1. volatility target  -> weight = target_vol / realised_vol
+      2. stop-loss risk cap -> the weight implied by risking at most
+         `max_risk_pct` of capital to an ATR-based stop
+    """
+    if entry_price is None or entry_price <= 0:
+        return {"error": "entry_price must be positive"}
+
+    vol = annualized_vol(returns)
+    if vol is None or vol <= 0:
+        return {"error": "need >= 5 return observations to estimate volatility"}
+
+    target = target_vol_pct / 100.0
+    w_vol = target / vol                       # uncapped — the cap is reported separately
+
+    w_risk = None
+    if atr and atr > 0:
+        stop_distance = atr * atr_multiplier
+        if stop_distance > 0:
+            shares_at_risk = (capital * max_risk_pct / 100.0) / stop_distance
+            w_risk = shares_at_risk * entry_price / capital
+
+    # Every constraint is a candidate; the smallest one binds, and we say which.
+    candidates = {"volatility_target": w_vol,
+                  "max_position": max_position_pct / 100.0}
+    if w_risk is not None:
+        candidates["risk_cap"] = w_risk
+    binding = min(candidates, key=candidates.get)
+    w = max(0.0, min(candidates.values()))
+
+    shares = int(capital * w / entry_price)
+    return {
+        "entry_price": round(entry_price, 2),
+        "annualized_vol_pct": round(vol * 100, 2),
+        "target_vol_pct": target_vol_pct,
+        "weight_from_vol_target_pct": round(w_vol * 100, 2),
+        "weight_from_risk_cap_pct": round(w_risk * 100, 2) if w_risk is not None else None,
+        "position_pct": round(w * 100, 2),
+        "capped_by": binding,
+        "shares": shares,
+        "position_value": round(shares * entry_price, 2),
+        "risk_usd": round(shares * atr * atr_multiplier, 2) if atr else None,
+    }
 
 @dataclass
 class RiskReport:
