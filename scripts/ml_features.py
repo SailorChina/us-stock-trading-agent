@@ -117,11 +117,17 @@ def extract_features(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
     
     result = pd.DataFrame(features)
     
-    # Target: direction of next 5 bars (1=up, 0=down)
+    # Target: direction of next 5 bars (1=up, 0=down).
+    # The trailing bars have no genuine 5-bar-ahead outcome yet; they used to
+    # be labelled against close[-1], which fabricates a label from a bar the
+    # model could not see. Mark them NaN — they stay available for PREDICTION
+    # (that is the whole point) but must be excluded from TRAINING.
     targets = []
     for i in range(lookback, n):
-        future_close = close[i+5] if i+5 < n else close[-1]
-        targets.append(1.0 if future_close > close[i] else 0.0)
+        if i + 5 >= n:
+            targets.append(np.nan)
+        else:
+            targets.append(1.0 if close[i + 5] > close[i] else 0.0)
     result["target"] = targets
     
     return result

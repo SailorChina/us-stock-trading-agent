@@ -45,9 +45,13 @@ def test_extract_features_has_target():
 
 
 def test_extract_features_target_binary():
+    """Targets are 0/1, except the trailing bars that have no 5-bar outcome."""
     df = _make_df(100, 100.0)
     result = extract_features(df, lookback=30)
-    assert set(result["target"].unique()).issubset({0.0, 1.0})
+    targets = result["target"].values.astype(float)
+    assert set(targets[:-5]).issubset({0.0, 1.0})
+    # the last 5 bars cannot know their own 5-bar-ahead outcome
+    assert np.isnan(targets[-5:]).all()
 
 
 def test_extract_features_insufficient_data():
