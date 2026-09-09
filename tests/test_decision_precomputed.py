@@ -131,7 +131,11 @@ def test_decision_threshold_bands(monkeypatch, score, expected):
         "regime": {"regime": "bull"},
         "price": PRICE,
     })
-    assert r["decision"]["composite_score"] == pytest.approx(score * 0.8 + 7.0, 0.1)
+    # Composite is a weight-normalised average: with smart money skipped the
+    # attempted weight is 90 (not 100), so the raw weighted sum must be
+    # rescaled by 100/90. Previously the engine just summed the weighted
+    # scores, which made `--fast` runs systematically ~5 points lower.
+    assert r["decision"]["composite_score"] == pytest.approx((score * 0.8 + 7.0) / 0.9, 0.1)
     assert r["decision"]["decision"] == expected
 
 
@@ -206,3 +210,132 @@ def test_regime_runs_before_decision(monkeypatch):
     assert seen["regime_data"] == REGIME
     assert seen["smart_money_data"] is SMART
     assert report["modules"]["decision"]["result"]["decision"]["action"] == "BUY"
+
+
+# --------------------------------------------------------------------------
+# v3.4.0 — scoring correctness: missing data, normalisation, two-sided plans
+# --------------------------------------------------------------------------
+
+def _boom(*a, **k):
+    raise RuntimeError("api down")
+
+
+def test_failed_factor_is_absent_not_bearish(monkeypatch):
+    """A factor that could not be computed must NOT be scored as a bearish 0.
+
+    Old behaviour wrote weighted_score=0 while leaving its weight in the sum,
+    so a data outage silently became a sell signal.
+    """
+    monkeypatch.setattr(de, "generate_signal", _boom)
+    monkeypatch.setattr(de, "pattern_score", lambda p: {"score": 90, "signal": "bullish"})
+    monkeypatch.setattr(de, "earnings_score",
+                        lambda e, s: {"score": 90, "signal": "bullish", "reasons": []})
+    r = de.compute_decision("US.NVDA", skip_smart_money=True, precomputed={
+        "enhanced": {"result": {"score": 90, "rating": "bullish", "reasons": []}},
+        "candlestick": {"patterns": [{"type": "Hammer", "direction": "bullish"}]},
+        "earnings": {"result": {"status": "ok", "financials": {}}},
+        "regime": {"regime": "bull"},
+        "price": PRICE,
+    })
+    d = r["decision"]
+    assert "technical" in r["data_quality"]["missing_factors"]
+    # remaining weight 20+15+15+10 = 60
+    assert d["composite_score"] == pytest.approx(
+        (90 * 20 + 90 * 15 + 90 * 15 + 70 * 10) / 60, 0.1)
+    assert d["composite_score"] > 80, "an outage must not read as bearish"
+    assert d["action"] == "BUY"
+
+
+def test_composite_is_weight_normalised(monkeypatch):
+    """composite = weighted average over AVAILABLE weight (0-100 scale).
+
+    Skipping smart money used to shrink the denominator-free sum, making
+    --fast runs systematically ~10% lower and incomparable with full runs.
+    """
+    monkeypatch.setattr(de, "pattern_score", lambda p: {"score": 50, "signal": "neutral"})
+    monkeypatch.setattr(de, "earnings_score",
+                        lambda e, s: {"score": 80, "signal": "bullish", "reasons": []})
+    base = dict(
+        tech_data={"status": "ok", "data": {"score": 72, "rating": "Overweight"}},
+        enhanced_data={"result": {"score": 65, "rating": "bullish", "reasons": []}},
+        candle_data={"patterns": [{"type": "Hammer", "direction": "bullish"}]},
+        earnings_data={"result": {"status": "ok", "financials": {}}},
+        regime_data={"regime": "bull"},
+        price_data=PRICE,
+    )
+    r_full = _fast(**base)                      # smart money present -> weight 100
+    assert r_full["decision"]["composite_score"] == pytest.approx(
+        (72 * 30 + 65 * 20 + 50 * 15 + 80 * 15 + 70 * 10 + 71 * 10) / 100, 0.1)
+
+    r_skip = de.compute_decision_fast("US.NVDA", smart_money_data=None, **base)
+    assert r_skip["decision"]["composite_score"] == pytest.approx(
+        (72 * 30 + 65 * 20 + 50 * 15 + 80 * 15 + 70 * 10) / 90, 0.1)
+    assert r_skip["data_quality"]["available_weight"] == 90
+
+
+def test_sell_decision_gets_short_trade_plan(monkeypatch):
+    """A SELL must produce a SHORT plan — stop above entry, targets below."""
+    monkeypatch.setattr(de, "pattern_score", lambda p: {"score": 10, "signal": "bearish"})
+    monkeypatch.setattr(de, "earnings_score",
+                        lambda e, s: {"score": 10, "signal": "bearish", "reasons": []})
+    r = de.compute_decision("US.NVDA", skip_smart_money=True, precomputed={
+        "tech": {"status": "ok", "data": {"score": 10, "rating": "Sell",
+                                          "trade_plan": {"atr": 5.5}}},
+        "enhanced": {"result": {"score": 10, "rating": "bearish", "reasons": []}},
+        "candlestick": {"patterns": [{"type": "EveningStar", "direction": "bearish"}]},
+        "earnings": {"result": {"status": "ok", "financials": {}}},
+        "regime": {"regime": "bear"},
+        "price": PRICE,
+    })
+    assert r["decision"]["action"] == "SELL"
+    tp = r["decision"]["trade_plan"]
+    assert tp["side"] == "short"
+    assert tp["stop_loss"] > tp["entry_zone"] > tp["target_1"]
+
+
+def test_confidence_reflects_factor_agreement(monkeypatch):
+    """Similar composite + different dispersion must yield different confidence.
+
+    Confidence used to be `composite*0.9+5`, i.e. pure decoration.
+    """
+    state = {"candle": 70, "earn": 70}
+    monkeypatch.setattr(de, "pattern_score",
+                        lambda p: {"score": state["candle"], "signal": "neutral"})
+    monkeypatch.setattr(de, "earnings_score",
+                        lambda e, s: {"score": state["earn"], "signal": "neutral",
+                                      "reasons": []})
+
+    def run(tech_score, enh_score):
+        return de.compute_decision("US.NVDA", skip_smart_money=True, precomputed={
+            "tech": {"status": "ok", "data": {"score": tech_score, "rating": "Hold"}},
+            "enhanced": {"result": {"score": enh_score, "rating": "neutral",
+                                    "reasons": []}},
+            "candlestick": {"patterns": [{"type": "Doji", "direction": "neutral"}]},
+            "earnings": {"result": {"status": "ok", "financials": {}}},
+            "regime": {"regime": "bull"},
+            "price": PRICE,
+        })
+
+    unanimous = run(70, 70)
+    state.update(candle=90, earn=40)
+    disputed = run(90, 50)
+
+    assert abs(unanimous["decision"]["composite_score"]
+               - disputed["decision"]["composite_score"]) < 3
+    assert disputed["decision"]["confidence"] < unanimous["decision"]["confidence"]
+    assert disputed["decision"]["conflict"] is True
+    assert unanimous["decision"]["conflict"] is False
+
+
+def test_no_usable_data_holds_instead_of_guessing(monkeypatch):
+    """When every factor fails, return HOLD — do not invent a direction."""
+    for name in ("generate_signal", "fetch_kline", "get_price",
+                 "get_earnings_summary", "get_regime"):
+        monkeypatch.setattr(de, name, _boom)
+    r = de.compute_decision("US.NVDA", skip_smart_money=True)
+    d = r["decision"]
+    assert d["insufficient_data"] is True
+    assert d["action"] == "HOLD"
+    assert d["composite_score"] == pytest.approx(50.0, 0.1)
+    assert d["confidence"] <= 20
+    assert len(r["data_quality"]["missing_factors"]) == 5

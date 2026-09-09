@@ -24,6 +24,19 @@ def _try_import(module_name, func_name):
         return None
 
 
+def _absent(weight: int, err: str = None) -> Dict:
+    """A factor whose data could not be obtained.
+
+    It contributes NOTHING — critically, its `weighted_score` must not be a
+    bearish 0 that is divided by a still-counted weight. `available=False`
+    removes the weight from the denominator instead.
+    """
+    f = {"weight": weight, "weighted_score": 0.0, "available": False}
+    if err:
+        f["error"] = err
+    return f
+
+
 def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool = False, smart_money_data: list = None, precomputed: dict = None) -> Dict:
     """Compute a comprehensive trading decision from all available signals."""
     t0 = time.time()
@@ -34,7 +47,7 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
         "factors": {},
         "weight_summary": {},
     }
-    
+
     pc = precomputed or {}
     tech_data = {}        # kept for downstream trade-plan reuse
     tech_precomputed = False
@@ -50,14 +63,18 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
             tech = generate_signal(symbol, timeframe, 60)
             if tech.get("status") == "ok":
                 tech_data = tech.get("data", {}) or {}
-        result["factors"]["technical"] = {
-            "score": tech_data.get("score", 50),
-            "rating": tech_data.get("rating", "Hold"),
-            "weight": 30,
-            "weighted_score": tech_data.get("score", 50) * 0.30,
-        }
+        if tech_data:
+            result["factors"]["technical"] = {
+                "score": tech_data.get("score", 50),
+                "rating": tech_data.get("rating", "Hold"),
+                "weight": 30,
+                "weighted_score": tech_data.get("score", 50) * 0.30,
+                "available": True,
+            }
+        else:
+            result["factors"]["technical"] = _absent(30)
     except Exception as e:
-        result["factors"]["technical"] = {"error": str(e), "weight": 30, "weighted_score": 0}
+        result["factors"]["technical"] = _absent(30, str(e))
 
     # 2. Enhanced Indicators (weight: 20%)
     try:
@@ -72,17 +89,21 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
             df = fetch_kline(symbol, timeframe, 60)
             if df is not None and len(df) >= 20:
                 enh = enhanced_signal_score(df)
-            else:
-                enh = {"score": 50, "rating": "neutral", "reasons": []}
-        result["factors"]["enhanced"] = {
-            "score": enh.get("score", 50),
-            "rating": enh.get("rating", "neutral"),
-            "reasons": enh.get("reasons", []),
-            "weight": 20,
-            "weighted_score": enh.get("score", 50) * 0.20,
-        }
+        if enh is None:
+            # No K-line -> factor absent. Do NOT fabricate a neutral 50:
+            # that would silently pull the composite towards "hold".
+            result["factors"]["enhanced"] = _absent(20)
+        else:
+            result["factors"]["enhanced"] = {
+                "score": enh.get("score", 50),
+                "rating": enh.get("rating", "neutral"),
+                "reasons": enh.get("reasons", []),
+                "weight": 20,
+                "weighted_score": enh.get("score", 50) * 0.20,
+                "available": True,
+            }
     except Exception as e:
-        result["factors"]["enhanced"] = {"error": str(e), "weight": 20, "weighted_score": 0}
+        result["factors"]["enhanced"] = _absent(20, str(e))
 
     # 3. Candlestick Patterns (weight: 15%)
     try:
@@ -98,18 +119,23 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
         # instead of re-fetching the K-line.
         if patterns is None:
             df = fetch_kline(symbol, timeframe, 60)
-            patterns = get_latest_patterns(df, 5) or [] if df is not None else []
-        pscore = pattern_score(patterns) if patterns else {"score": 50, "signal": "neutral"}
-        result["factors"]["candlestick"] = {
-            "score": pscore.get("score", 50),
-            "signal": pscore.get("signal", "neutral"),
-            "patterns": [p.get("type", "?") for p in patterns],
-            "weight": 15,
-            "weighted_score": pscore.get("score", 50) * 0.15,
-        }
+            if df is not None:
+                patterns = get_latest_patterns(df, 5) or []
+        if patterns is None:
+            result["factors"]["candlestick"] = _absent(15)
+        else:
+            pscore = pattern_score(patterns) if patterns else {"score": 50, "signal": "neutral"}
+            result["factors"]["candlestick"] = {
+                "score": pscore.get("score", 50),
+                "signal": pscore.get("signal", "neutral"),
+                "patterns": [p.get("type", "?") for p in patterns],
+                "weight": 15,
+                "weighted_score": pscore.get("score", 50) * 0.15,
+                "available": True,
+            }
     except Exception as e:
-        result["factors"]["candlestick"] = {"error": str(e), "weight": 15, "weighted_score": 0}
-    
+        result["factors"]["candlestick"] = _absent(15, str(e))
+
     # 4. Earnings/Analyst (weight: 15%)
     try:
         earnings = None
@@ -121,7 +147,7 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                 earnings = _pc_earn
         if earnings is None:
             earnings = get_earnings_summary(symbol)
-        if earnings.get("status") == "ok":
+        if isinstance(earnings, dict) and earnings.get("status") == "ok":
             escore = earnings_score(earnings, symbol)
             result["factors"]["earnings"] = {
                 "score": escore["score"],
@@ -131,10 +157,13 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                 "analyst_target": earnings.get("financials", {}).get("target_mean_price"),
                 "weight": 15,
                 "weighted_score": escore["score"] * 0.15,
+                "available": True,
             }
+        else:
+            result["factors"]["earnings"] = _absent(15)
     except Exception as e:
-        result["factors"]["earnings"] = {"error": str(e), "weight": 15, "weighted_score": 0}
-    
+        result["factors"]["earnings"] = _absent(15, str(e))
+
     # 5. Market Regime (weight: 10%)
     try:
         regime = None
@@ -143,20 +172,24 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
             regime = _pc_reg
         else:
             regime = get_regime()
-        regime_score = {"bull": 70, "neutral": 50, "volatile": 40, "bear": 25}.get(
-            regime.get("regime", "neutral"), 50
-        )
-        result["factors"]["regime"] = {
-            "regime": regime.get("regime", "unknown"),
-            "score": regime_score,
-            "vix": regime.get("vix", 0),
-            "confidence": regime.get("confidence", 0),
-            "weight": 10,
-            "weighted_score": regime_score * 0.10,
-        }
+        if isinstance(regime, dict) and regime.get("regime"):
+            regime_score = {"bull": 70, "neutral": 50, "volatile": 40, "bear": 25}.get(
+                regime.get("regime", "neutral"), 50
+            )
+            result["factors"]["regime"] = {
+                "regime": regime.get("regime", "unknown"),
+                "score": regime_score,
+                "vix": regime.get("vix", 0),
+                "confidence": regime.get("confidence", 0),
+                "weight": 10,
+                "weighted_score": regime_score * 0.10,
+                "available": True,
+            }
+        else:
+            result["factors"]["regime"] = _absent(10)
     except Exception as e:
-        result["factors"]["regime"] = {"error": str(e), "weight": 10, "weighted_score": 0}
-    
+        result["factors"]["regime"] = _absent(10, str(e))
+
     # 6. Smart Money (weight: 10%)
     if not skip_smart_money:
         try:
@@ -173,21 +206,56 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
                 "score": sm_score,
                 "weight": 10,
                 "weighted_score": sm_score * 0.10,
+                "available": True,
             }
         except Exception as e:
-            result["factors"]["smart_money"] = {"error": str(e), "weight": 10, "weighted_score": 0}
-    
-    # Compute composite score
-    total_weighted = sum(f.get("weighted_score", 0) for f in result["factors"].values() 
-                        if isinstance(f, dict) and "weighted_score" in f)
-    total_weight = sum(f.get("weight", 0) for f in result["factors"].values()
-                       if isinstance(f, dict) and "weight" in f)
-    
-    composite = total_weighted if total_weight > 0 else 50
-    composite = max(0, min(100, composite))
-    
+            result["factors"]["smart_money"] = _absent(10, str(e))
+
+    # ---- composite: availability-aware and weight-normalised --------------
+    # Only factors that actually produced data go into the score. A failed
+    # lookup is *missing information*, not a bearish opinion, so its weight
+    # leaves the denominator instead of contributing a punishing zero.
+    factors = {k: v for k, v in result["factors"].items() if isinstance(v, dict)}
+    usable = {k: v for k, v in factors.items() if v.get("available", True)}
+    total_weighted = sum(v.get("weighted_score", 0) for v in usable.values())
+    total_weight = sum(v.get("weight", 0) for v in usable.values())
+    attempted_weight = sum(v.get("weight", 0) for v in factors.values())
+    missing = sorted(k for k, v in factors.items() if not v.get("available", True))
+
+    if total_weight > 0:
+        composite = 100.0 * total_weighted / total_weight
+    else:
+        composite = 50.0
+    composite = max(0.0, min(100.0, composite))
+
+    # ---- honest confidence ------------------------------------------------
+    # Was previously a deterministic transform of the composite score, i.e.
+    # decoration. Real confidence = do the factors agree, is the data
+    # complete, and is the score actually away from neutral?
+    scores = [v.get("score", 50) for v in usable.values() if v.get("score") is not None]
+    if len(scores) >= 2:
+        spread = max(scores) - min(scores)
+        mean_s = sum(scores) / len(scores)
+        std = (sum((s - mean_s) ** 2 for s in scores) / len(scores)) ** 0.5
+        agreement = max(0.0, min(1.0, 1.0 - std / 35.0))
+    else:
+        spread, std = 0.0, 0.0
+        # One (or zero) readings cannot corroborate anything — "no dispersion"
+        # here means "no evidence", not "unanimous".
+        agreement = 0.0
+    completeness = (total_weight / attempted_weight) if attempted_weight > 0 else 0.0
+    conviction = max(0.0, min(1.0, abs(composite - 50.0) / 30.0))
+    confidence = 100.0 * (0.35 * agreement + 0.30 * completeness + 0.35 * conviction)
+    confidence = int(max(5, min(95, round(confidence))))
+    conflict = bool(len(scores) >= 2 and spread >= 40)
+
     # Decision logic
-    if composite >= 70:
+    insufficient = not usable
+    if insufficient:
+        # Nothing could be measured — do not manufacture a directional call.
+        decision = "HOLD"
+        action = "HOLD"
+    elif composite >= 70:
         decision = "STRONG_BUY"
         action = "BUY"
     elif composite >= 45:
@@ -202,18 +270,23 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
     else:
         decision = "STRONG_SELL"
         action = "SELL"
-    
+
     # Get price info (reuse cached price when available)
     price = None
     _pc_price = pc.get("price")
     if isinstance(_pc_price, dict) and _pc_price.get("latest_price"):
         price = _pc_price
     else:
-        price = get_price(symbol)
-    current_price = price.get("latest_price", 0) if price else 0
-    change_pct = price.get("change_pct", 0) if price else 0
-    
+        try:
+            price = get_price(symbol)
+        except Exception:
+            price = None
+    current_price = price.get("latest_price", 0) if isinstance(price, dict) else 0
+    change_pct = price.get("change_pct", 0) if isinstance(price, dict) else 0
+
     # Trade plan from tech analysis (reuse tech_data when available)
+    # NOTE: direction must match the decision — a SELL gets a SHORT plan
+    # (stop above entry, targets below), not a recycled long plan.
     trade_plan = {}
     try:
         tp = (tech_data or {}).get("trade_plan", {}) if isinstance(tech_data, dict) else {}
@@ -224,27 +297,35 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
             if tech2.get("status") == "ok":
                 tp = tech2.get("data", {}).get("trade_plan", {})
         if tp and current_price > 0:
-            entry = round(current_price * 0.985, 2)
             atr = tp.get("atr", 0)
-            if atr > 0:
-                stop = round(entry - atr * 2.0, 2)
+            short = action == "SELL"
+            if short:
+                entry = round(current_price * 1.015, 2)
+                stop = round(entry + atr * 2.0, 2) if atr > 0 else round(entry * 1.05, 2)
+                risk = stop - entry
+                tp1 = round(entry - risk * 2.0, 2)
+                tp2 = round(entry - risk * 2.5, 2)
             else:
-                stop = round(entry * 0.95, 2)
-            risk = entry - stop
-            tp1 = round(entry + risk * 2.0, 2)
-            tp2 = round(entry + risk * 2.5, 2)
+                entry = round(current_price * 0.985, 2)
+                stop = round(entry - atr * 2.0, 2) if atr > 0 else round(entry * 0.95, 2)
+                risk = entry - stop
+                tp1 = round(entry + risk * 2.0, 2)
+                tp2 = round(entry + risk * 2.5, 2)
             trade_plan = {
+                "side": "short" if short else "long",
                 "entry_zone": entry,
                 "stop_loss": stop,
                 "target_1": tp1,
                 "target_2": tp2,
-                "risk_reward": round((tp1 - entry) / risk, 2) if risk > 0 else 0,
+                "risk_reward": round(abs(tp1 - entry) / risk, 2) if risk > 0 else 0,
                 "atr": atr,
                 "current_price": current_price,
             }
+            if action == "HOLD":
+                trade_plan["note"] = "reference only - action is HOLD"
     except Exception:
         pass
-    
+
     result["decision"] = {
         "composite_score": round(composite, 1),
         "decision": decision,
@@ -252,11 +333,24 @@ def compute_decision(symbol: str, timeframe: str = "1d", skip_smart_money: bool 
         "current_price": current_price,
         "change_pct": change_pct,
         "trade_plan": trade_plan,
-        "confidence": min(95, int(composite * 0.9 + 5)) if composite >= 55 else max(10, int(composite * 0.5)),
+        "confidence": confidence,
+        "confidence_components": {
+            "agreement": round(agreement, 3),
+            "completeness": round(completeness, 3),
+            "conviction": round(conviction, 3),
+        },
+        "factor_spread": round(spread, 1),
+        "conflict": conflict,
+        "insufficient_data": insufficient,
+    }
+    result["data_quality"] = {
+        "available_weight": total_weight,
+        "attempted_weight": attempted_weight,
+        "missing_factors": missing,
     }
     result["weight_summary"] = {k: v.get("weight", 0) for k, v in result["factors"].items() if isinstance(v, dict)}
     result["elapsed_sec"] = round(time.time() - t0, 1)
-    
+
     return result
 
 
@@ -291,12 +385,12 @@ def main():
     parser.add_argument("--fast", action="store_true", help="Skip smart money scan")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
-    
+
     if args.fast:
         result = compute_decision_fast(args.symbol, timeframe=args.timeframe)
     else:
         result = compute_decision(args.symbol, timeframe=args.timeframe)
-    
+
     output = json.dumps(result, ensure_ascii=False, indent=2, default=str)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
