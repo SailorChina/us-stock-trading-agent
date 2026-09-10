@@ -25,7 +25,7 @@
 ## 测试状态
 
 ```
-338 passed (全部通过，非沙箱/无文件锁环境)
+343 passed (全部通过，非沙箱/无文件锁环境)
 pytest tests/ -q
 ```
 
@@ -71,7 +71,7 @@ pytest tests/ -q
 | **`test_ml_predictor_honesty.py`** | **8** | **ML 正确性：跨标模型隔离、scaler 无泄露、val 选模型、基线对比** |
 | **`test_strategy_validator.py`** | **33** | **无前视验证、横截面 IC+Newey-West、分位组、非重叠模拟、风格回调、事件研究** |
 | **`test_vol_targeting.py`** | **9** | **波动率目标仓位：vol 高者仓位小、约束生效报告、零波动保护** |
-| **`test_stock_selector.py`** | **16** | **选股因子：三风格方向性、不接落刀、企稳确认（收阳+收复MA5）、板块归簇** |
+| **`test_stock_selector.py`** | **21** | **选股因子：三风格方向性、不接落刀、企稳确认、板块归簇、12-1动量/短期反转/低波动** |
 | **`test_daily_pick.py`** | **9** | **每日扫描：三风格排行、regime 门控、流动性过滤、热门池并入、坏数据存活、板块上限** |
 
 ## 快速使用
@@ -131,10 +131,12 @@ python scripts/strategy_validator.py --symbol US.NVDA --horizon 5 --bars 400 --t
 python scripts/strategy_validator.py --mode cross --horizon 10 --bars 300 --limit 15
 
 # 每日选股扫描（美东收盘后跑，输出今日多头候选）：
-python scripts/daily_pick.py                       # momentum + reversal + quality
-python scripts/daily_pick.py --style momentum --top 10
+python scripts/daily_pick.py                       # 默认 mom_12_1 + quality
+python scripts/daily_pick.py --styles mom_12_1,quality,low_vol --top 10
+python scripts/daily_pick.py --styles momentum,reversal --max-per-sector 2
+# 可选风格：momentum / reversal / quality / mom_12_1 / st_reversal / low_vol
 # 单独验证某个风格（live 与验证共用同一打分函数）：
-python scripts/strategy_validator.py --mode cross --style momentum --limit 20
+python scripts/strategy_validator.py --mode cross --style mom_12_1 --horizon 21 --bars 800 --limit 60
 
 # 事件研究（稀有信号风格如 reversal 的正确验证法：信号日 vs 该股平常日）：
 python scripts/strategy_validator.py --mode events --style reversal --horizon 10 --bars 400 --limit 15
@@ -306,7 +308,8 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
-- **v3.5.2** - 按实测改造 reversal 并**复测（结论：企稳确认救不了它，但病因定位了）**：① 新增**企稳确认硬门控**——回调中"仍在下跌"的票直接 0 分（必须收阳，即有人开始接），收阳且**收复 MA5** 记 +30、仅收阳 -12/+12；回调深度与超卖权重从 30 降到 20 让位（暴力反弹反而分数更低，因为它已经吃掉了折价与超卖，入场更差）；② 新增**板块归簇** `SECTORS`/`sector_of`（半导体单独一簇），扫描器加 `--max-per-sector`（默认 3，0 关闭），事件研究加板块分解 / `worst_sector` / `sector_spread_pct` —— 一个坏板块再也无法藏在还算体面的均值里。**60 只池复测：信号 127→92（企稳确实滤掉了一批），但每股超额 -0.31%→-0.66%（t=-0.63）仍未通过**；关键诊断是**板块**：semis 33 个信号、平均超额 **-8.0%**，而 software +1.41%、consumer +2.64%，板块间价差 13.3 个百分点，最差 4 只（MU/MRVL/AMAT/AMD）全是半导体 -10%~-18%。**结论：问题不在"接刀时机"，而在于高波动趋势股的回调往往就是趋势反转的起点**——下一步应在 reversal 上加波动率/贝塔过滤（只在低波动趋势股上做回调），而不是继续微调入场规则。新增 7 项测试
+- **v3.6.0** - **按文献证据重建因子库**（调研与来源见 `knowledge/factor_evidence_2026.md`）：① **修复 `fetch_kline` 只能取到约 1 年历史**（不给日期范围时 futu 固定返回 251 根日线/52 根周线，与 `num` 无关）—— 后果是**所有需要长回看的因子静默全 0 分**、验证器只报"无证据"而不报错，12-1 动量（需 274 根）根本无法计算；现在 `num>250` 时自动推算起始日期，实测稳定取到 800 根（3 年），横截面调仓期也从 9 期提升到 35 期；② 新增**证据背书的三因子**：`mom_12_1`（纯 12-1 动量、波动率缩放、MA200 趋势过滤——旧的 momentum 混了 52 周高点追逐，是另一回事）、`st_reversal`（短期反转，方向与动量相反，独立验证）、`low_vol`（低风险异象，作可选防守腿）；③ `daily_pick` 默认风格改为**显式 `DEFAULT_STYLES=[mom_12_1, quality]`**（不再静默扫描所有已注册风格），取数 400→800 根；④ 验证器打分窗口默认改为**截至当天的全部历史**（短窗口会让 MA200/12-1 类因子静默归零）。**实测（60 只流动股、800 根≈3年、21 日、35 期、2100 对）**：mom_12_1 IC=+0.0129（NW t=0.37）、前 20% 组合 +189.3% vs 等权 +135.8%（超额 **+53.5pp**）——但**胜率仅 48.6%**，超额由少数大赢家驱动，**未达显著**；st_reversal IC=-0.0289（t=-1.13）；low_vol IC=-0.0930（t=-1.76，三年 -103.9pp，与 2026 年"低波动为最差因子"的机构口径一致）。**结论：暂无因子达到统计显著，mom_12_1 是唯一方向为正者，不可据此加杠杆**。新增 5 项测试
+- **v3.5.2** - 按实测改造 reversal 并**复测（结论：企稳确认救不了它，但病因定位了）**：① 新增**企稳确认硬门控**——回调中"仍在下跌"的票直接 0 分（必须收阳，即有人开始接），收阳且**收复 MA5** 记 +30、仅收阳 +12；回调深度与超卖权重从 30 降到 20 让位（暴力反弹反而分数更低，因为它已经吃掉了折价与超卖，入场更差）；② 新增**板块归簇** `SECTORS`/`sector_of`（半导体单独一簇），扫描器加 `--max-per-sector`（默认 3，0 关闭），事件研究加板块分解 / `worst_sector` / `sector_spread_pct` —— 一个坏板块再也无法藏在还算体面的均值里。**60 只池复测：信号 127→92（企稳确实滤掉了一批），但每股超额 -0.31%→-0.66%（t=-0.63）仍未通过**；关键诊断是**板块**：semis 33 个信号、平均超额 **-8.0%**，而 software +1.41%、consumer +2.64%，板块间价差 13.3 个百分点，最差 4 只（MU/MRVL/AMAT/AMD）全是半导体 -10%~-18%。**结论：问题不在"接刀时机"，而在于高波动趋势股的回调往往就是趋势反转的起点**——下一步应在 reversal 上加波动率/贝塔过滤（只在低波动趋势股上做回调），而不是继续微调入场规则。新增 7 项测试
 - **v3.5.1** - 验证器新增**事件研究模式** `--mode events`：reversal 这类"稀有信号"风格无法用横截面 IC 验证（典型一天几乎每只票都是 0 分，排序统计量退化，实测 IC 全 None）。事件研究问对的问题：**信号触发后，未来收益是否好于该股自己的平常日**。逐 symbol 走历史：得分 ≥ 阈值记为信号日并跳过 horizon 根（同一段行情不重复计数），其余日构成该股自身基线；每股超额 = 信号日均值 − 平常日均值，以 **symbol 为独立样本做单样本 t 检验**（一只大牛股造不出显著性）。注意：事件研究的打分窗口是**截至当天的全部历史**（reversal 需要真实 MA200 判定趋势，120 根窗口永远算不出来会静默全 0——踩过并修复）；CLI 阈值按模式取默认（single 60 / events 20）。**实测（15 只流动股、400 根、10 日持有）：10 只票 36 个非重叠信号，信号日 +2.48% vs 平常日 +0.90% → 每股超额 +1.58%，t=1.80（10 个独立样本）——方向偏正但不够显著**，需扩大样本再判。5 项新增测试
 - **v3.5.0** - 按产品目标（每日收盘选股）重构：新增纯因子引擎 `stock_selector.py`（momentum 趋势动量 / reversal 回调低吸 / quality 低波质量 三种**独立**排行——合并成一个综合分会互相抵消）+ 每日扫描命令 `daily_pick.py`（自建流动性池 + futu 热门榜并集，实价重过滤流动性；单只取数带守护线程，坏代码不拖垮整夜任务；regime 为**门控**：bear/volatile 直接输出 NO_NEW_LONGS；每候选附 close / ATR% / 2×ATR 止损 / 波动率目标仓位；输出标注"研究候选非买入保证"）。关键纪律：`strategy_validator.py --mode cross` 新增 `--style composite|momentum|reversal|quality`，**live 选股与验证共用同一打分回调** —— 因子不可能只进实盘不进验证。25 项新增离线测试（含"回调趋势内的刀不接"：无前序上涨时 reversal 必为 0）
 - **v3.4.0** - `strategy_validator.py` 新增**横截面验证** `--mode cross`（有统计功效的模式）：单标的纵向验证重叠窗口把 186 个样本压到 ~37 个独立观测，而检测 IC=0.05 需 ~1500 个 —— `no_evidence` 其实是"还没测出来"。横截面模式改为**每个调仓日对整个股票池打分排序**：调仓日之间间隔 = horizon（前视窗口永不重叠）、每日一个横截面 IC、IC 序列同时给 naive 与 **Newey-West HAC t 统计量**（相邻期共享市场状态，naive 标准误太小正是 alpha 被发明出来的方式）、前 quantile 组合 vs 等权股票池 + 胜率 + 最大回撤。内置 40 只流动性美股默认股票池。**实测（15 只大型股、300 根、10 日、19 期、285 对）：mean IC=-0.1084，NW t=-2.18 显著为负；按分数买前 20% 收益 -19.49% vs 等权 +11.64%，超额 -31.12%，仅 31.6% 期间跑赢 → `inverse`**。即：该技术分在横截面上**奖励已涨上去的名字、其后 10 天倾向回归**——现阶段直接拿它选股是亏钱的（这也印证了把动量簇权重从 65% 降到 50% 的方向）。新增 9 项离线测试
