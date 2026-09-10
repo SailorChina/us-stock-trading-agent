@@ -174,3 +174,52 @@ def test_sector_of_groups_semis_together():
 
 def test_sector_of_defaults_to_other():
     assert sel.sector_of("US.NOTREAL") == "other"
+
+
+# --- evidence-backed family (12-1 momentum / short-term reversal / low vol) --
+
+def _last_month_change(base, n, rng, factor):
+    """Uptrend whose final 21 bars move to `factor` x the level 21 bars ago."""
+    c = base * np.cumprod(1 + rng.normal(0.002, 0.008, n))
+    c[-21:] = c[-22] * np.linspace(1.0, factor, 21)
+    return c
+
+
+def test_momentum_12_1_ranks_trends():
+    up = sel.momentum_12_1_score(_df(_uptrend))
+    down = sel.momentum_12_1_score(_df(_downtrend))
+    assert up["score"] > 60
+    assert down["score"] < 40
+    assert "mom_12_1_pct" in up["stats"]
+
+
+def test_momentum_12_1_needs_full_year():
+    """12-1 cannot be computed from half a year - must say so, not guess."""
+    r = sel.momentum_12_1_score(_df(_uptrend, n=150))
+    assert r["score"] == 0.0
+    assert any("insufficient" in x for x in r["reasons"])
+
+
+def test_short_term_reversal_prefers_losers():
+    """Last month's loser should outscore last month's winner (opposite of momentum)."""
+    loser = sel.short_term_reversal_score(
+        _df(lambda b, n, r: _last_month_change(b, n, r, 0.80)))
+    winner = sel.short_term_reversal_score(
+        _df(lambda b, n, r: _last_month_change(b, n, r, 1.25)))
+    assert loser["score"] > winner["score"]
+    assert loser["score"] >= 90
+    assert winner["score"] <= 20
+
+
+def test_low_vol_prefers_calm_names():
+    calm = sel.low_vol_score(_df(lambda b, n, r: b * np.cumprod(1 + r.normal(0.001, 0.007, n))))
+    wild = sel.low_vol_score(_df(_chaotic))
+    assert calm["score"] > wild["score"]
+    assert calm["score"] > 50
+
+
+def test_new_styles_are_registered():
+    for name in ("mom_12_1", "st_reversal", "low_vol"):
+        assert name in sel.STYLES
+        r = sel.score_style(name, _df(_uptrend))
+        assert 0.0 <= r["score"] <= 100.0

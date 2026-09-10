@@ -34,8 +34,14 @@ import stock_selector as sel
 from risk_manager import vol_target_position
 
 DEFAULT_UNIVERSE = os.path.join(_SCRIPT_DIR, "..", "configs", "universe_us.json")
-FETCH_BARS = 400
-FETCH_TIMEOUT_S = 10
+FETCH_BARS = 800          # 3 years: long enough for 12-1 momentum and MA200
+FETCH_TIMEOUT_S = 12
+
+# Which styles the nightly scan runs by default. Deliberately NOT "all of
+# them": these two families have the strongest replication record (12-1
+# momentum; profitability/quality). Everything in stock_selector.STYLES stays
+# selectable via --styles.
+DEFAULT_STYLES = ["mom_12_1", "quality"]
 
 
 def _guarded_fetch(symbol: str, bars: int):
@@ -115,7 +121,8 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
 
     report = {
         "generated_at": datetime.now().isoformat(),
-        "scan": {"universe_file": os.path.basename(universe_path), "styles": list(styles or sel.STYLES)},
+        "scan": {"universe_file": os.path.basename(universe_path),
+                 "styles": list(styles or DEFAULT_STYLES)},
         "regime": {},
         "gate": {},
         "candidates": {},
@@ -141,7 +148,7 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
         symbols = symbols[:limit]
 
     # 3. fetch once per symbol, score under every requested style
-    scored = {st: [] for st in (styles or list(sel.STYLES))}
+    scored = {st: [] for st in (styles or DEFAULT_STYLES)}
     n_ok = n_fail = 0
     for sym in symbols:
         df = fetch(sym, FETCH_BARS)
@@ -224,7 +231,8 @@ def _console(report: dict) -> str:
 def main():
     ap = argparse.ArgumentParser(description="daily US stock picker")
     ap.add_argument("--universe", default=DEFAULT_UNIVERSE)
-    ap.add_argument("--styles", default="momentum,reversal,quality")
+    ap.add_argument("--styles", default=",".join(DEFAULT_STYLES),
+                    help="comma separated; any of " + "|".join(sorted(sel.STYLES)))
     ap.add_argument("--top", type=int, default=8)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--no-hot", action="store_true")

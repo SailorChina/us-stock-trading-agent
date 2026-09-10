@@ -60,7 +60,7 @@ def _spearman(x: List[float], y: List[float]) -> Optional[float]:
         return float(np.corrcoef(rx, ry)[0, 1])
 
 
-def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 120,
+def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 0,
                   min_bars: int = 60, step: int = 1,
                   scorer=None) -> List[Dict]:
     """Score every bar using only past data, and attach the forward return.
@@ -69,6 +69,11 @@ def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 120,
     cross-sectional validator measure a *specific style* (momentum /
     reversal / quality from stock_selector) instead of the whole composite.
     Default: the historical composite of the decision engine's technical block.
+
+    `window_bars <= 0` (the default) means "all history up to bar t". A short
+    trailing window is a trap: any factor needing a long lookback (MA200,
+    12-1 momentum) silently scores 0 on every bar and the IC degenerates to
+    None instead of raising.
     """
     from tech_engine import signal_from_df
     from enhanced_indicators import enhanced_signal_score
@@ -82,7 +87,7 @@ def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 120,
 
     rows = []
     for t in range(min_bars, len(df) - horizon, step):
-        lo = max(0, t + 1 - window_bars)
+        lo = 0 if window_bars <= 0 else max(0, t + 1 - window_bars)
         window = df.iloc[lo:t + 1].copy()
 
         if scorer is not None:
@@ -271,7 +276,9 @@ def ic_stats(ics: List[float], lags: Optional[int] = None) -> Dict:
     """Mean IC with both naive and autocorrelation-robust t-statistics."""
     n = len(ics)
     if n < 3:
-        return {"n_periods": n, "mean_ic": None, "significant": False,
+        return {"n_periods": n, "mean_ic": None, "std_ic": None, "icir": None,
+                "se_newey_west": None, "t_stat_newey_west": None,
+                "t_stat_naive": None, "significant": False,
                 "note": "too few periods"}
     mean_ic = float(np.mean(ics))
     std_ic = float(np.std(ics, ddof=1))
@@ -463,7 +470,7 @@ def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal"
 
 def validate_cross_section(symbols: Optional[List[str]] = None, horizon: int = 10,
                            bars: int = 250, quantile: float = 0.2,
-                           window_bars: int = 120, min_names: int = 10,
+                           window_bars: int = 0, min_names: int = 10,
                            limit: Optional[int] = None,
                            fetcher=None, style: str = "composite") -> Dict:
     """Cross-sectional validation: rank many symbols per date, not one over time.

@@ -67,7 +67,7 @@ def test_scan_returns_candidates_for_every_style(fake_data):
     rep = _run(fake_data, fetcher, top=2)
     assert rep["gate"]["block_new_longs"] is False
     assert rep["conclusion"] == "scan complete - see candidates"
-    assert set(rep["candidates"]) == {"momentum", "reversal", "quality"}
+    assert set(rep["candidates"]) == set(dp.DEFAULT_STYLES)
     for style, rows in rep["candidates"].items():
         assert rows, f"{style} produced no candidates"
         row = rows[0]
@@ -131,7 +131,7 @@ def test_run_pick_applies_sector_cap(monkeypatch, tmp_path):
         return _pullback_df(seed=abs(hash(sym)) % 500)         # reversal setups
 
     rep = dp.run_pick(universe_path=str(uni), include_hot=False, top=4,
-                      max_per_sector=1, fetcher=fetcher)
+                      styles=["reversal"], max_per_sector=1, fetcher=fetcher)
     assert len(rep["candidates"]["reversal"]) <= 1, \
         "all-semis universe must not fill the list"
 

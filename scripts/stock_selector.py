@@ -348,10 +348,107 @@ def sector_of(symbol: str) -> str:
     return SECTORS.get(str(symbol).upper(), "other")
 
 
+# ---------------------------------------------------------------------------
+# Evidence-backed factor family (v3.6.0)
+#
+# Sourced from the replication literature rather than from chart lore:
+#   * Hou-Xue-Zhang (2020) rebuilt 452 published anomalies; only momentum,
+#     profitability, investment and value survived robust re-estimation
+#     (liquidity anomalies failed 95/102, mostly because equal-weighted tests
+#     ride untradeable microcaps - our universe is large caps, so that trap is
+#     avoided by construction).
+#   * Jegadeesh-Titman (1993) / Carhart (1997): 12-1 momentum is the single
+#     most replicated cross-sectional signal. Skipping the most recent month
+#     is not a detail - that month carries short-term reversal, which partly
+#     cancels momentum.
+#   * Jegadeesh (1990) / Lehmann (1990): short-term (1-month) REVERSAL is a
+#     separate documented effect: last month's losers bounce. Different from
+#     our pullback-in-uptrend rule, so it gets measured on its own.
+#   * Frazzini-Pedersen (2014) / Baker-Bradley-Wurgler (2011): the low-risk
+#     anomaly. It was the WORST factor in 2026 YTD, so the validator decides
+#     for our sample instead of the narrative.
+# ---------------------------------------------------------------------------
+
+def momentum_12_1_score(df: pd.DataFrame, lookback: int = 252,
+                        skip: int = 21) -> Dict:
+    """Pure 12-1 momentum: return from t-252 to t-21, skipping the last month."""
+    c = _arr(df, "close")
+    n = len(c)
+    stats: Dict[str, float] = {"bars": n}
+
+    if n < lookback + skip + 1:
+        return {"score": 0, "reasons": ["insufficient history for 12-1"], "stats": stats}
+
+    mom = float(c[-1 - skip] / c[-1 - lookback] - 1.0)
+    stats["mom_12_1_pct"] = round(mom * 100, 1)
+    reasons = [f"12-1 momentum {mom * 100:+.0f}%"]
+
+    vol = _annualized_vol(c)
+    if vol:
+        stats["ann_vol_pct"] = round(vol * 100, 1)
+        mom = mom / max(vol, 0.10)            # vol-scaled momentum (Sharpe-like)
+
+    score = 50.0 + mom * 60.0
+    ma200 = _ma(c, 200)
+    if ma200 and c[-1] < ma200:
+        score -= 15.0
+        reasons.append("below MA200 (trend broken)")
+    else:
+        reasons.append("above MA200")
+
+    return {"score": round(max(0.0, min(100.0, score)), 1),
+            "reasons": reasons, "stats": stats}
+
+
+def short_term_reversal_score(df: pd.DataFrame, lookback: int = 21) -> Dict:
+    """Short-term reversal: last month's LOSERS are expected to bounce.
+
+    Opposite sign to momentum on purpose, and measured separately - the
+    cross-sectional validator decides whether it still pays in a liquid
+    large-cap universe (it has weakened since the 1990s).
+    """
+    c = _arr(df, "close")
+    n = len(c)
+    stats: Dict[str, float] = {"bars": n}
+    if n < lookback + 2:
+        return {"score": 0, "reasons": ["insufficient history"], "stats": stats}
+
+    ret = float(c[-1] / c[-1 - lookback] - 1.0)
+    stats["ret_1m_pct"] = round(ret * 100, 1)
+    score = 50.0 - ret * 250.0
+    tail = "oversold bounce candidate" if ret < 0 else "already extended"
+    return {"score": round(max(0.0, min(100.0, score)), 1),
+            "reasons": [f"1m return {ret * 100:+.1f}% -> {tail}"], "stats": stats}
+
+
+def low_vol_score(df: pd.DataFrame) -> Dict:
+    """Low-risk anomaly: prefer low realised volatility and shallow drawdowns."""
+    c = _arr(df, "close")
+    n = len(c)
+    stats: Dict[str, float] = {"bars": n}
+    if n < 64:
+        return {"score": 0, "reasons": ["insufficient history"], "stats": stats}
+
+    vol = _annualized_vol(c) or 0.0
+    w = c[-64:]
+    mdd = float(np.min(w / np.maximum.accumulate(w) - 1.0))
+    stats["ann_vol_pct"] = round(vol * 100, 1)
+    stats["mdd_63d_pct"] = round(mdd * 100, 1)
+
+    vol_part = max(0.0, min(1.0, (0.60 - vol) / 0.60)) * 60.0
+    dd_part = max(0.0, min(1.0, (0.35 - abs(mdd)) / 0.35)) * 40.0
+    return {"score": round(vol_part + dd_part, 1),
+            "reasons": [f"vol {vol*100:.0f}%, 63d max drawdown {mdd*100:.1f}%"],
+            "stats": stats}
+
+
 STYLES: Dict[str, Callable[[pd.DataFrame], Dict]] = {
     "momentum": momentum_score,
     "reversal": reversal_score,
     "quality": quality_score,
+    "mom_12_1": momentum_12_1_score,
+    "st_reversal": short_term_reversal_score,
+    "low_vol": low_vol_score,
 }
 
 
