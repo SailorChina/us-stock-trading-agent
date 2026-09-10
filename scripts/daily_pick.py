@@ -265,10 +265,12 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
              include_hot: bool = True, limit: int = None,
              min_price: float = 3.0, min_adv: float = 20_000_000.0,
              max_per_sector: int = 3, fetcher=None,
-             capital: float = 0.0, regime_fn=None) -> dict:
-    """Main entry. `fetcher` and `regime_fn` are injectable for offline tests."""
+             capital: float = 0.0, regime_fn=None, quota_fn=None) -> dict:
+    """Main entry. `fetcher`, `regime_fn` and `quota_fn` are injectable for
+    offline tests."""
     read_regime = regime_fn or _live_regime
     fetch = fetcher or _PacedFetcher()
+    live = fetcher is None      # an injected fetcher means offline/tests
 
     report = {
         "generated_at": datetime.now().isoformat(),
@@ -329,6 +331,37 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
                 symbols.append(s)
     if limit:
         symbols = symbols[:limit]
+
+    # 2b. history-kline BUDGET preflight -- online only.
+    #
+    # Separate from the frequency limit: this budget is 1 per distinct symbol
+    # per rolling 30 days and is TIERED BY ACCOUNT SIZE (100 / 300 / 1000 /
+    # 2000). Re-requesting a symbol already inside the window is free, and futu
+    # lists the covered codes, so the exact cost of this scan is computable.
+    # A 228-name scan costs 228 of it: fine on the 300 tier, impossible on the
+    # base 100 tier -- and the latter would show up as a partial universe with
+    # no error, which is exactly the shape of failure this file keeps hitting.
+    if quota_fn is None:
+        quota_fn = history_quota_preflight if live else (lambda syms: {"checked": False})
+    try:
+        report["scan"]["quota"] = quota_fn(symbols)
+    except Exception as exc:
+        report["scan"]["quota"] = {"checked": False, "error": str(exc)[:120]}
+    q = report["scan"]["quota"]
+    if q.get("checked") and not q.get("ok"):
+        report["scan"]["quota_warning"] = (
+            "history-kline BUDGET is short by %d symbol(s). %d of %d names are "
+            "already inside the 30-day window (those are free), but %d more "
+            "need charging and only %d remain. The list below would be built "
+            "from a PARTIAL universe -- shrink the universe or wait for the "
+            "window to roll." % (
+                q["shortfall"], q["covered"], len(symbols),
+                q["needs_charge"], q["remaining"]))
+    elif not q.get("checked"):
+        # A preflight that failed is not the same as a preflight that passed.
+        # Reporting nothing here would hide the budget check exactly the way the
+        # fetch failure was hidden, so say so out loud.
+        report["scan"]["quota_error"] = q.get("error") or "not read"
 
     # 3. fetch once per symbol, score under every requested style
     scored = {st: [] for st in (styles or DEFAULT_STYLES)}
@@ -432,6 +465,15 @@ def _console(report: dict) -> str:
                  f"{report['scan'].get('symbols_filtered_out', 0)} filtered out)")
     if report["scan"].get("fetcher_note"):
         lines.append(f"NOTE: {report['scan']['fetcher_note']}")
+    q = report["scan"].get("quota") or {}
+    if q.get("checked"):
+        lines.append(f"History-kline budget: {q['used']} used / {q['remaining']} left "
+                     f"({q['covered']} of this universe already covered, "
+                     f"{q['needs_charge']} to charge)")
+    if report["scan"].get("quota_warning"):
+        lines.append(f"WARNING: {report['scan']['quota_warning']}")
+    if report["scan"].get("quota_error"):
+        lines.append(f"NOTE: history-kline budget not checked ({report['scan']['quota_error']})")
     if report["scan"].get("last_bar_date"):
         lines.append(f"Last daily bar: {report['scan']['last_bar_date']}")
     if report["scan"].get("bar_warning"):
@@ -530,6 +572,67 @@ def _release_futu_runtime() -> None:
         close_futu_context()
     except Exception:
         pass
+
+
+def history_quota_preflight(symbols, quota=None) -> dict:
+    """Decide whether the history-KLINE BUDGET can cover this scan.
+
+    Two different limits exist and they need different responses:
+
+      * a FREQUENCY limit (~60 calls / 30s, measured). Response: pace and retry.
+        Handled by _PacedFetcher.
+
+      * a BUDGET limit: 1 per distinct symbol per rolling 30 days, TIERED BY
+        ACCOUNT SIZE -- 100 for a plain account, 300 at 10k HKD, 1000 at 500k
+        HKD, 2000 at 5m HKD. Response: check it UP FRONT. Re-requesting a symbol
+        already inside the window is free, and futu returns the list of covered
+        codes, so the exact cost is computable rather than guessable.
+
+    This matters because a 228-name scan costs 228 of that budget. On the 300
+    tier that leaves only 72 symbols of headroom, and on the base 100 tier the
+    scan CANNOT complete -- which shows up as a partial universe with no
+    exception raised, i.e. the failure mode that looks like a valid answer.
+
+    `quota` is injectable for tests as (used, remaining, covered_codes).
+    """
+    out = {"checked": False}
+    if quota is None:
+        try:
+            from tech_engine import _get_futu_ctx
+            ctx = _get_futu_ctx()
+            if ctx is None:
+                return out
+            ret, data = ctx.get_history_kl_quota(get_detail=True)
+            if ret != 0:
+                out["error"] = str(data)[:120]
+                return out
+            quota = data
+        except Exception as exc:
+            out["error"] = "%s: %s" % (type(exc).__name__, str(exc)[:100])
+            return out
+
+    used, remaining, covered_raw = quota
+    # get_detail=True returns a list of DICTS ([{"code": "US.NEM", "name": ...},
+    # ...]), not a list of code strings -- so a bare set() raises
+    # "unhashable type: dict". Tolerate both shapes.
+    covered = set()
+    for item in (covered_raw or []):
+        code = item.get("code") if isinstance(item, dict) else item
+        if code:
+            covered.add(str(code))
+    wants = list(symbols or [])
+    needs = [s for s in wants if s not in covered]
+    out.update({
+        "checked": True,
+        "used": int(used),
+        "remaining": int(remaining),
+        "covered": len(wants) - len(needs),
+        "needs_charge": len(needs),
+        "ok": len(needs) <= int(remaining),
+    })
+    if not out["ok"]:
+        out["shortfall"] = len(needs) - int(remaining)
+    return out
 
 
 def _bar_completeness_warning(last_bar: str) -> str:

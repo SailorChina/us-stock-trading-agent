@@ -316,6 +316,85 @@ def test_scan_separates_unfetchable_from_filtered_out(fake_data, monkeypatch):
     assert scan["symbols_dropped"] == 3
 
 
+# --- history-kline BUDGET preflight -----------------------------------------
+
+def test_quota_preflight_counts_only_symbols_not_already_covered():
+    """Re-requesting a symbol inside the 30-day window is FREE.
+
+    So the cost of a scan is not len(universe); it is the number of names not
+    already covered. Getting this wrong either refuses a scan that was actually
+    affordable or, worse, waves through one that is not.
+    """
+    q = dp.history_quota_preflight(
+        ["US.A", "US.B", "US.C"],
+        quota=(240, 60, ["US.A", "US.B"]))
+    assert q["checked"] is True
+    assert q["covered"] == 2
+    assert q["needs_charge"] == 1
+    assert q["ok"] is True
+    assert "shortfall" not in q
+
+
+def test_quota_preflight_refuses_a_scan_the_budget_cannot_cover():
+    """A 228-name scan needs 228 budget; on the base 100 tier it is impossible.
+
+    That failure is quantitative and silent -- a partial universe with no
+    exception -- so it has to be caught before the fetch, not deduced from a
+    suspiciously short candidate list afterwards.
+    """
+    # 4 names, only 1 covered -> 3 to charge, and 5 remain: this FITS
+    q = dp.history_quota_preflight(["US.A", "US.B", "US.C", "US.D"],
+                                   quota=(295, 5, ["US.A"]))
+    assert q["needs_charge"] == 3 and q["remaining"] == 5
+    assert q["ok"] is True
+
+    # 4 names, none covered -> 4 to charge, but only 2 remain: short by 2
+    q2 = dp.history_quota_preflight(["US.A", "US.B", "US.C", "US.D"],
+                                    quota=(298, 2, []))
+    assert q2["needs_charge"] == 4 and q2["ok"] is False and q2["shortfall"] == 2
+
+    # an empty covered list is the worst case: the whole scan must be charged
+    q3 = dp.history_quota_preflight(list("ABCDEFGHIJ"), quota=(90, 100, []))
+    assert q3["needs_charge"] == 10 and q3["ok"] is True
+
+
+def test_run_pick_surfaces_a_quota_shortfall(fake_data):
+    """A budget shortfall must be loud, not folded into "few candidates"."""
+    def quota_fn(symbols):
+        return dp.history_quota_preflight(symbols, quota=(298, 2, []))
+
+    rep = _run(fake_data, lambda sym, bars: _df(seed=1), top=2, quota_fn=quota_fn)
+    assert rep["scan"]["quota"]["ok"] is False
+    assert "PARTIAL universe" in rep["scan"]["quota_warning"]
+    assert "QUOTA" in dp._console(rep).upper() or \
+           "BUDGET" in dp._console(rep).upper()
+
+
+def test_run_pick_offline_does_not_touch_the_quota(fake_data):
+    rep = _run(fake_data, lambda sym, bars: _df(seed=1), top=2)
+    assert rep["scan"]["quota"]["checked"] is False
+
+
+def test_quota_preflight_accepts_the_detail_payload_shape():
+    """get_detail=True returns a list of DICTS, not code strings.
+
+    The live payload is [{"code": "US.NEM", "name": "纽曼矿业"}, ...]. Feeding
+    that straight to set() raises "unhashable type: dict", which the caller's
+    try/except turns into "{'checked': False}" -- i.e. the budget silently goes
+    unchecked, which is the same failure shape as everything else in this file.
+    """
+    q = dp.history_quota_preflight(
+        ["US.A", "US.B"], quota=(10, 290, [{"code": "US.A", "name": "x"}]))
+    assert q["checked"] is True
+    assert q["covered"] == 1 and q["needs_charge"] == 1
+    # plain strings must keep working too
+    q2 = dp.history_quota_preflight(["US.A"], quota=(10, 290, ["US.A"]))
+    assert q2["covered"] == 1 and q2["needs_charge"] == 0
+    # and an empty detail list (get_detail=False) means nothing is covered
+    q3 = dp.history_quota_preflight(["US.A"], quota=(10, 290, []))
+    assert q3["covered"] == 0 and q3["needs_charge"] == 1
+
+
 # --- bar completeness -------------------------------------------------------
 
 def test_bar_completeness_warning_flags_an_open_session():
