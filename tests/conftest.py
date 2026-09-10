@@ -1,5 +1,5 @@
 """Shared pytest fixtures for the US stock trading agent."""
-import sys, os, json, pytest
+import sys, os, json, tempfile, pytest
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.parent / "scripts"
@@ -27,11 +27,30 @@ def _patch_futu_log_dir():
     """
     if "futu.common.ft_logger" in sys.modules:
         return  # already imported: too late to redirect
-    try:
-        log_dir = Path(__file__).parent.parent / "data" / "_futu_log"
-        log_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        return
+
+    # Prefer a workspace-local log dir (easy to find, gitignored), but fall back
+    # to the system temp dir. The workspace sits under Desktop, and writes there
+    # are intermittently denied by the sandbox; when that happens the SDK raises
+    # PermissionError at import, every test module that touches futu fails to
+    # COLLECT, and it reads like a code break when it is purely environmental.
+    # Probe with a real write rather than trusting os.access().
+    candidates = [
+        Path(__file__).parent.parent / "data" / "_futu_log",
+        Path(tempfile.gettempdir()) / "_futu_log",
+    ]
+    log_dir = None
+    for cand in candidates:
+        try:
+            cand.mkdir(parents=True, exist_ok=True)
+            probe = cand / ".write_probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            log_dir = cand
+            break
+        except Exception:
+            continue
+    if log_dir is None:
+        return  # nowhere writable: let the SDK fail on its own terms
 
     original_getenv = os.getenv
 
