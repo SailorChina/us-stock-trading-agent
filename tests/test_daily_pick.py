@@ -21,12 +21,13 @@ def _df(n=320, base=100.0, seed=5):
 
 
 def _pullback_df(n=320, base=100.0, seed=6):
-    """Uptrend with a compounding 6-day pullback (a reversal setup)."""
+    """Uptrend pullback that ends on an UP day (reversal needs stabilisation)."""
     rng = np.random.default_rng(seed)
     close = base * np.cumprod(1 + rng.normal(0.004, 0.01, n))
     peak = close[-7]
-    for j in range(1, 7):
-        close[-j] = peak * (0.965 ** j)
+    for j in range(6, 1, -1):
+        close[-j] = peak * (0.965 ** (7 - j))
+    close[-1] = close[-2] * 1.012
     return _frame(close, seed)
 
 
@@ -103,6 +104,36 @@ def test_low_liquidity_symbols_are_filtered_out(fake_data):
     seen = {r["symbol"] for rows in rep["candidates"].values() for r in rows}
     assert "US.A" in seen
     assert seen <= {"US.A"}, f"low-liquidity symbols leaked through: {seen}"
+
+
+# --- sector diversification -------------------------------------------------
+
+def test_sector_cap_limits_concentration():
+    """Top-N must not be one leveraged bet wearing five tickers."""
+    rows = [{"symbol": s, "score": 90 - i} for i, s in enumerate(
+        ["US.NVDA", "US.AMD", "US.INTC", "US.MU", "US.AMAT", "US.JPM"])]
+    capped = dp._sector_cap(rows, max_per_sector=1)
+    assert [r["symbol"] for r in capped] == ["US.NVDA", "US.JPM"]
+    capped2 = dp._sector_cap(rows, max_per_sector=2)
+    assert [r["symbol"] for r in capped2] == ["US.NVDA", "US.AMD", "US.JPM"]
+    assert dp._sector_cap(rows, max_per_sector=0) == rows      # 0 disables
+
+
+def test_run_pick_applies_sector_cap(monkeypatch, tmp_path):
+    import market_regime
+    monkeypatch.setattr(market_regime, "get_regime",
+                        lambda: {"regime": "bull", "vix": 14.0, "status": "ok"})
+    uni = tmp_path / "semis.json"
+    uni.write_text(json.dumps({"symbols": ["US.NVDA", "US.AMD", "US.INTC", "US.MU"]}),
+                   encoding="utf-8")
+
+    def fetcher(sym, bars):
+        return _pullback_df(seed=abs(hash(sym)) % 500)         # reversal setups
+
+    rep = dp.run_pick(universe_path=str(uni), include_hot=False, top=4,
+                      max_per_sector=1, fetcher=fetcher)
+    assert len(rep["candidates"]["reversal"]) <= 1, \
+        "all-semis universe must not fill the list"
 
 
 def test_hot_list_symbols_are_added(fake_data, monkeypatch):

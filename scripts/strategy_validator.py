@@ -337,7 +337,7 @@ def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal"
     cannot fabricate significance).
     """
     from tech_engine import fetch_kline
-    from stock_selector import STYLES
+    from stock_selector import STYLES, sector_of
     fetch = fetcher or fetch_kline
     score_fn = scorer if scorer is not None else STYLES.get(style)
     if score_fn is None:
@@ -381,7 +381,8 @@ def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal"
                 t += 1
         if events:
             base = float(np.mean(normal)) if normal else 0.0
-            per_symbol.append({"symbol": sym, "n_events": len(events),
+            per_symbol.append({"symbol": sym, "sector": sector_of(sym),
+                               "n_events": len(events),
                                "mean_event_ret": float(np.mean(events)),
                                "baseline_ret": base,
                                "excess": float(np.mean(events)) - base})
@@ -412,6 +413,23 @@ def validate_events(symbols: Optional[List[str]] = None, style: str = "reversal"
     t_stat = mean_excess / se if se > 0 else None
     overall_event = float(np.mean([p["mean_event_ret"] for p in per_symbol]))
     overall_base = float(np.mean([p["baseline_ret"] for p in per_symbol]))
+
+    # Signals cluster by sector; surface it so a single bad sector cannot hide
+    # inside an acceptable-looking average.
+    by_sector: Dict[str, list] = {}
+    for p in per_symbol:
+        by_sector.setdefault(p.get("sector", "other"), []).append(p)
+    breakdown = sorted(
+        [{"sector": sec, "symbols": len(items),
+          "signals": int(sum(i["n_events"] for i in items)),
+          "mean_excess_pct": round(float(np.mean([i["excess"] for i in items])) * 100, 2)}
+         for sec, items in by_sector.items()],
+        key=lambda d: d["mean_excess_pct"])
+    report["sector_breakdown"] = breakdown
+    if breakdown and len(breakdown) >= 2:
+        report["worst_sector"] = breakdown[0]["sector"]
+        report["sector_spread_pct"] = round(
+            breakdown[-1]["mean_excess_pct"] - breakdown[0]["mean_excess_pct"], 2)
 
     report.update({
         "signals": int(n_events),

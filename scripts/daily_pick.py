@@ -85,10 +85,30 @@ def _liquidity(df) -> dict:
     return {"price": px, "adv_usd": adv, "bars": n}
 
 
+def _sector_cap(rows: list, max_per_sector: int) -> list:
+    """Cap how many names from one sector can make a list.
+
+    Signals cluster by sector (in the 60-name event study the five worst
+    reversal names were all semis), so an un-diversified top-N is really one
+    leveraged bet wearing five tickers.
+    """
+    if max_per_sector <= 0:
+        return rows
+    counts: dict = {}
+    out = []
+    for r in rows:
+        sec = sel.sector_of(r["symbol"])
+        if counts.get(sec, 0) >= max_per_sector:
+            continue
+        counts[sec] = counts.get(sec, 0) + 1
+        out.append(r)
+    return out
+
+
 def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
              include_hot: bool = True, limit: int = None,
              min_price: float = 3.0, min_adv: float = 20_000_000.0,
-             fetcher=None) -> dict:
+             max_per_sector: int = 3, fetcher=None) -> dict:
     """Main entry. `fetcher` injectable for offline tests."""
     from market_regime import get_regime
     fetch = fetcher or (lambda s, b: _guarded_fetch(s, b))
@@ -156,7 +176,8 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
     # 4. rank and enrich the top names per style
     for st, rows in scored.items():
         rows.sort(key=lambda r: r["score"], reverse=True)
-        picked = rows[:top]
+        diversified = _sector_cap(rows, max_per_sector)
+        picked = diversified[:top]
         enriched = []
         for r in picked:
             pos = vol_target_position(r["close"] or 0.0, returns=r["returns"])
@@ -209,13 +230,16 @@ def main():
     ap.add_argument("--no-hot", action="store_true")
     ap.add_argument("--min-price", type=float, default=3.0)
     ap.add_argument("--min-adv", type=float, default=20_000_000.0)
+    ap.add_argument("--max-per-sector", type=int, default=3,
+                    help="max names per sector in each style list (0 = off)")
     ap.add_argument("--output", default=None)
     args = ap.parse_args()
 
     report = run_pick(universe_path=args.universe,
                       styles=[s.strip() for s in args.styles.split(",") if s.strip()],
                       top=args.top, include_hot=not args.no_hot, limit=args.limit,
-                      min_price=args.min_price, min_adv=args.min_adv)
+                      min_price=args.min_price, min_adv=args.min_adv,
+                      max_per_sector=args.max_per_sector)
 
     out = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     if args.output:
