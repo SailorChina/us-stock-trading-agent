@@ -11,7 +11,25 @@ except ImportError:
 
 
 def get_regime():
-    """Detect current market regime using VIX + SPX trend + breadth."""
+    """Detect current market regime using VIX + SPX trend + breadth.
+
+    HONESTY NOTE (2026-09-10): both inputs are read from `US.VIX` and `US.SPX`,
+    and futu recognises NEITHER -- both come back "unknown symbol". Previously
+    that failure was silent: vix and spx_chg stayed 0, classify_regime(0, 0)
+    hit its `vix < 20 and spx_chg > -1` branch, and this function reported a
+    confident "neutral" every single day. Anything downstream that treated the
+    reading as real was being misled (daily_pick's "no new longs in a bear
+    market" gate was, and could never have fired).
+
+    So the failure is now reported instead of smoothed over: if neither quote
+    succeeds the result is `regime: "unknown"`, `status: "unavailable"`. Callers
+    that need a regime must handle that case rather than trust a default.
+
+    Separately: even with working data, a market-timing gate is NOT wanted on
+    this strategy. Six market filters measured against the validated momentum
+    signal all reduced both return and significance (SPY>200d MA: 44.8% -> 32.9%,
+    HAC t 2.75 -> 1.68). See knowledge/factor_evidence_2026.md section 8.
+    """
     result = {"generated_at": datetime.now().isoformat(), "regime": "unknown"}
     
     if not FUTU_OK:
@@ -24,16 +42,29 @@ def get_regime():
         try:
             from futu_pool import get_futu_context, RET_OK
             ctx = get_futu_context()
+            got_any = False
             ret_vix, df_vix = ctx.get_stock_quote(["US.VIX"])
             vix_val = 0
             if ret_vix == RET_OK and df_vix is not None and len(df_vix) > 0:
                 vix_val = float(df_vix.iloc[0].get("last_price", 0))
+                got_any = got_any or vix_val > 0
             ret_spx, df_spx = ctx.get_stock_quote(["US.SPX"])
             spx_val = 0
             spx_chg = 0
             if ret_spx == RET_OK and df_spx is not None and len(df_spx) > 0:
                 spx_val = float(df_spx.iloc[0].get("last_price", 0))
                 spx_chg = float(df_spx.iloc[0].get("change_ratio", 0))
+                got_any = got_any or spx_val > 0
+            if not got_any:
+                # Do NOT classify. classify_regime(0, 0) returns "neutral",
+                # which reads as a real market call and is not one.
+                _r[0] = {
+                    "status": "unavailable",
+                    "regime": "unknown",
+                    "error": "US.VIX and US.SPX are not available from this "
+                             "data source (both return 'unknown symbol')",
+                }
+                return
             regime = classify_regime(vix_val, spx_chg)
             _r[0] = {
                 "status": "ok",

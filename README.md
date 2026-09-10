@@ -16,7 +16,7 @@
 | **财报分析** | `earnings_analyzer.py` | PE/Forward PE、EPS增长、营收增长、分析师目标价 |
 | **决策引擎** | `decision_engine.py` | 六因子综合评分、权重融合、自适应交易计划（多空双向） |
 | **策略验证** | `strategy_validator.py` | 无前视回测、横截面排序验证、事件研究（稀有信号）、IC+Newey-West t、分位组单调性、vs 买入持有 |
-| **每日选股** | `daily_pick.py` + `stock_selector.py` | 收盘后扫描：momentum/reversal/quality 三层独立排行、regime 门控、流动性过滤、2×ATR 止损 + 波动率目标仓位 |
+| **每日选股** | `daily_pick.py` + `stock_selector.py` | 收盘后扫描：`mom_12_1_raw` 排行（唯一通过验证的风格）、流动性过滤、2×ATR 止损、**等金额下单清单**（`--capital`/`--sheet`，小资金可执行）、离线复核（`--from-cache`）、**限频感知取数** |
 | **风险管理** | `risk_manager.py` | ATR止损、风险收益比、动态仓位、组合诊断 |
 | **市场情绪** | `market_sentiment.py` | VIX分级、指数报价、Magnificent 7 |
 | **市场状态** | `market_regime.py` | Bull/Bear/Volatile/Neutral 自动识别 |
@@ -72,7 +72,7 @@ pytest tests/ -q
 | **`test_strategy_validator.py`** | **33** | **无前视验证、横截面 IC+Newey-West、分位组、非重叠模拟、风格回调、事件研究** |
 | **`test_vol_targeting.py`** | **9** | **波动率目标仓位：vol 高者仓位小、约束生效报告、零波动保护** |
 | **`test_stock_selector.py`** | **21** | **选股因子：三风格方向性、不接落刀、企稳确认、板块归簇、12-1动量/短期反转/低波动** |
-| **`test_daily_pick.py`** | **9** | **每日扫描：三风格排行、regime 门控、流动性过滤、热门池并入、坏数据存活、板块上限** |
+| **`test_daily_pick.py`** | **19** | **每日扫描：排行、无市场择时门控、流动性过滤、热门池并入、坏数据存活、板块上限、等金额清单、限频节流与冷却重试、取数/过滤分开计数、盘中未完成 bar 警告** |
 
 ## 快速使用
 
@@ -134,11 +134,23 @@ python scripts/strategy_validator.py --mode cross --horizon 10 --bars 300 --limi
 python scripts/daily_pick.py                       # 默认 mom_12_1_raw（唯一通过验证的风格）
 python scripts/daily_pick.py --styles mom_12_1_raw,st_reversal --top 10
 python scripts/daily_pick.py --styles momentum,reversal --max-per-sector 2
+
+# 实盘可执行的清单（$3,000 账户：5 只等金额、每只 $600、附 2×ATR 止损）：
+python scripts/daily_pick.py --top 5 --capital 3000 --sheet --no-hot \
+       --output data/daily_pick_latest.json
+#   → 附 top-5 排名、等金额下单清单、数据新鲜度与盘中未完成 bar 警告。
+#   → 取数有节流（30 次/30 秒，228 只约 4 分钟），因为不限频会被富途静默拒绝、
+#     只取到前几十只 —— 那会产出"看起来合理但基于残缺池子"的清单。
+# 离线复核（不联网、秒级、确定性；用 data/_hist_cache）：
+python scripts/daily_pick.py --from-cache --top 5 --capital 3000 --sheet
+
 # 可选风格：mom_12_1_raw / mom_12_1 / momentum / reversal / quality / st_reversal / low_vol
 #          + 已知交易系统：clenow / minervini / htf / pullback_ema / vcp / turtle55
 # 注意（实测结论）：只有 mom_12_1_raw 通过了显著性检验（HAC t=2.36，超额 +1.37%/期）。
 #   mom_12_1 / momentum / reversal / st_reversal 实测无超额（t≈0），
 #   quality / low_vol 实测显著为负（t=-2.42 / -3.31）。
+#   **没有任何市场择时门控能改善它**：6 种过滤器（SPY>200MA、回撤<5/10/15%、波动率<20/25%）
+#   全部同时降低收益与显著性（详见 knowledge/factor_evidence_2026.md 第 8 节）。
 #   海外知名交易系统（Clenow 指数回归动量 / Minervini 趋势模板 / Qullamaggie 高紧旗 /
 #   VCP / 20-EMA 回调 / 海龟突破）全部实测未达显著（t 在 [-1.75, 1.24]），
 #   详见 knowledge/factor_evidence_2026.md 第 5.4 节。它们保留在 --styles 供持续复测。
@@ -333,6 +345,8 @@ pytest tests/ --cov=scripts --cov-report=term-missing
 
 ## 版本历史
 
+- **v3.12.0** - **移除市场择时门控 + 修好每日清单的在线路径**（完整证据见 `knowledge/factor_evidence_2026.md` 第 8、9 节）：① **测了 6 种市场门控，全部有害** —— 同口径（`mom_12_1_raw` / 21 日 / top-5 / 228 只）下**无门控是最好的**：44.8% / Sharpe 1.14 / HAC **t=2.75**；SPY>200 日均线 32.9%（t=1.68）、回撤<5% 32.5%（t=1.62）、回撤<10% 36.8%（t=2.01）、回撤<15% 37.6%（t=2.12）、波动率<20% 36.2%（t=1.90）、波动率<25% 42.0%（t=2.36）。唯一改善回撤的"回撤<5%"（-27.2% vs -31.7%）要付 **12.3pp 年化 + t 从 2.75 掉到 1.62** —— 不成立。形态与 Clenow 的指数规则完全一致：**过滤器把回撤和反弹起点一起切掉了**。② **顺带查出 `daily_pick` 的门控从来不会触发**：它读 `US.VIX` / `US.SPX`，而**富途不认识这两个代码**（实测 `未知股票 VIX`），两值恒为 0、`classify_regime(0,0)` **每天返回 `neutral`** ⇒ 一个不会触发的安全网比没有更糟（清单看起来有风控、实际满仓裸奔）。已移除该门控（regime 只作上下文打印），并把 `market_regime.get_regime()` 的**静默假中性**改成 `regime="unknown" / status="unavailable"`。③ **在线取数路径此前是完全坏的，而且坏得不出声**：`request_history_kline` 有**滑窗限频（实测约 60 次/30 秒；冷启动连续约 40 次成功后每次立即失败）**，未节流的 228 只扫描只取到前几十只，报"180 dropped"看起来像流动性过滤，实际是取数被拒——**同一天的在线 top-5 与离线 top-5 是不同的组合**（在线 MU/INTC/AMAT/CRWD/PANW vs 离线 MU/WDC/STX/INTC/DELL），"看起来合理但是错的"是最坏的失败模式。新增 `_PacedFetcher`（**节流 30 次/30 秒 + 限频冷却 31 秒后重试同一只 + 冷却次数封顶 6**），并把计数**拆成 `symbols_unfetchable` 与 `symbols_filtered_out`**（正是混在一起才掩盖了故障）。④ 修掉在线路径另外两个静默失败：**futu 日志重定向**（不重定向时 `%APPDATA%` 写入被拒 → 取数线程抛异常被吞 → **0/228**；修复后 12 只从 0 passed 变 12 passed）与**进程永不退出**（`SysConfig.set_all_thread_daemon(True)`；原来扫描跑完进程挂死且 stdout 不刷新，与网络故障无法区分）；外加**盘中未完成 bar 警告**（日线带当日日期，盘中最后一根是半个交易日，会被当成收盘价喂进 12-1 动量——不报错，只是信号悄悄变错）。⑤ `daily_pick` 新增 **`--capital` / `--sheet`**（输出等金额下单清单：$3,000 → 5 只 × $600、估算股数、2×ATR 止损）、**`--from-cache`**（离线确定性复核）、`--output`（落盘 JSON）。⑥ 顺带发现并记录：`backtest_engine.load_cache()` 会把放在 `_hist_cache` 里的基准 ETF（SPY/QQQ/RSP/IWM/MTUM/QUAL/USMV，共 7 只）一起读进来，所以历史验证跑的是 235 只而非 228 只 —— 本次测试已显式限定到池子。测试 507 → **517 passed**（`test_daily_pick.py` 9 → 19）
+- **v3.11.0** - **时点季度基本面落地 + 真质量因子首测**（完整证据见 `knowledge/factor_evidence_2026.md` 第 7 节；数据面实测另见 `knowledge/futu_data_exploration_2026-09-10.md`）：① 新增 `scripts/futu_fundamentals.py`，用 `get_financials_statements --statement-type 4` 建**时点季度基本面缓存**（`data/_fund_cache/`，**228/228 只、15,745 个季度、最早回溯 2006-12-30**），每期 29 个字段（ROE/ROIC/毛利/净利/FCF 比/杠杆/周转）；**无前视靠 `available_date`（期末 + 45 天）**，打分按它过滤而不是按期末——按期末打分等于偷看未来，而且**表现为好结果而非报错**。② 工程要点：**进程内直连比子进程快 70 倍**（子进程每页都重新 import futu + 新建 OpenD 握手 ≈10s/只，复用单一 context **0.14s/只**）；**财务接口限频 30 次/30 秒且超限直接失败不排队**（不限频 1 秒内全 fail），限到 ~1 次/秒 + 一次冷却重试。③ `backtest_engine.backtest_style` 新增 **`panel=`**（按 `{symbol:{date:score}}` 打分），让时点因子复用全部既有指标。④ **真质量因子实测（176 只有 12 年历史的标的，动量基准跑同一批）**：质量单独**无超额**（21d/top-5 t=0.46、21d/top-10 t=0.25、63d/top-5 t=0.39），但**回撤永远最低**（比动量低 8–10pp）⇒ **是防御属性、不是收益来源**；**质量≥50 做过滤从不改善 Sharpe**（1.16→1.16、1.12→1.06、1.03→0.92）⇒ 权衡而非改进；质量与动量**秩相关三配置都约 0.118** ⇒ 信息不同但不互补。⑤ **两条方法学教训**：**部分缓存会翻转结论的符号**（62 只时说"质量门控恶化回撤"，176 只上变成"改善 4.4pp"）；**"好得不真实"必须先诊断**（曾打印 CAGR 71.3% / Sharpe 3.40 / 回撤 -3.4%，病因是门控后只剩寥寥几个调仓期，靠加 `rebalances` 到输出才暴露）。74 项新增测试
 - **v3.10.0** - **$3,000 小资金落地：碎股能力实测 + 持仓数的剂量反应**（完整证据见 `knowledge/factor_evidence_2026.md` 第 5.6 节）：① **实测而非假设富途 OpenAPI 的碎股能力** —— 直连模拟账户实际发单：`qty=0.29` 被拒「数量不合法」、`qty=1.5` **被静默截断为 1.0 股**、`qty=2` 正常 ⇒ **只能整股**，且 ≥1 的小数会被**静默向下取整**（`execute_plan` 已加 `int()` 防护，否则会悄悄少买）；同时发现客户端内置 `futu.zip` 是**裁剪版、不含 `place_order`**（FTQuant 沙箱本身也无法下单）。② `live_trader` 新增 **`--capital`**（按 $3,000 规划而不是账户现金——模拟账户有 100 万，否则仓位被放大 300 倍）与 **`--fractional`**（输出 App「按金额」碎股委托单）；新增 `order_sheet()`（**等权按金额**，正是 `backtest_engine` 度量的口径）；`plan()` 现在**显式报告买不起的标的与现金拖累**（`unaffordable` / `deployed` / `cash_left`），此前是静默跳过。③ **实测整股限制的代价（$3,000，2026-09-10 真实名单）**：买 top-10 → **85% 现金拖累**（10 只里 8 只买不起）；买 top-5 → 48%。**明确不做"换便宜票"**——价格不是这个信号的一部分，换票等于换策略。④ **持仓数的剂量反应（本轮最重要的新证据）**：4 个切点 × 2 个调仓频率**全部单调** —— 21 日 top-3 **+3.54%/期（t=3.00）** > top-5 **+2.29%（t=2.81）** > top-10 +1.41%（t=2.44）> top-20 +0.62%（t=1.71）；63 日（top-3 +11.86% t=2.97 / top-5 +6.88% t=2.47 / top-10 +4.04% t=2.27 / top-20 +2.07% t=1.76）同序。**top-5 的样本内/外双双 >2（2.29/2.04），top-10 的样本外掉到 1.71**。单调剂量反应是真实效应的特征，不是挑参数；同时记下反面证据——**越集中，幸存者偏差被放大得越多**（2026-09-10 的 top-5 全是 AI 存储/半导体周期的赢家）。⑤ **成本实测**：小账户按**笔数**付费而非金额，$1/笔落在 $3,000 上是 **1.14%/年**（top-5/21日，34 笔）vs **2.31%/年**（top-10/21日，69 笔）；同一笔 $1 在 $150,000 账户只有 0.05% —— 小账户的成本劣势是结构性的。⑥ **$3,000 推荐配置：5 只等权 $600、按金额碎股、约每 21 个交易日调仓**（净年化 44.5%、最大回撤 **-31.6%**、最差年份 -15.0%）；对比 top-10 净 32.7% / 回撤 -28.2% / 最差 -7.6% —— **这是用回撤换收益，不是免费午餐**；不建议 3 只（回撤 -33.5%，单票暴雷无法分散）。新增 12 项测试（`order_sheet` 等权与碎股标记、`unaffordable`/`cash_left`、`--capital` 默认值、`int()` 防护），live_trader 测试 33 → 42
 - **v3.9.1** - **OpenAPI 执行脚本 `live_trader.py`（默认 dry-run、默认模拟盘）**：FTQuant 的驱动标的要在界面逐个声明、无法扫全市场，所以"带选股的下单"只能走 OpenAPI（无池子限制，可打分信号被验证时的全部 228 只）。安全模型：**不加 `--execute` 只出计划不发单**；**默认模拟盘**，真钱需 `--execute` + `--env real` + `--unlock` **三者同时**，缺密码则**在建连接之前**退出；下单计划是**纯函数**（`plan` / `rank_universe` / `momentum_12_1`），无需 OpenD 与账户即可单测。实测打通全链路（模拟账户可用 1,000,002.59）：扫 228/228、产出 10 只计划含 ATR 止损、**未发出任何订单**。修掉测试抓出的真 bug：`OpenUSTradeContext` 不存在，正确构造是 `OpenSecTradeContext(filter_trdmarket=TrdMarket.US, security_firm=SecurityFirm.FUTUSECURITIES)`。新增**板块集中度警告**（2026-09-10 的 top-10 有 6 只半导体、含存储实为 8/10 同一产业周期）。33 项测试
 - **v3.9.0** - **富途量化（FTQuant）策略移植 + 离线校验器**：从客户端安装目录逆向出平台 Python 环境与 SDK（`C:/Program Files/FTNN/app/<版本>/PythonEnv/`，`pkgs/futu.zip` 共 376 函数 / 410 类，`res/strategy_template.py` 为官方模板）；沙箱限制实测自 `futu/common/safe_env.py`：**禁 `ctypes/socket/subprocess/multiprocessing`、禁写文件（读允许）、无 numpy/pandas、Python 3.8**；**驱动标的须在界面逐个声明** ⇒ **无法扫描全市场**，因此定为**选股在本仓库、执行在平台**。产出 `scripts/ftquant_mom_12_1_raw.py`（12-1 动量排序 + 等权持有 + ATR 止损 + 每 21 根 K 线调仓，并**在文件内写明不做波动率缩放**的原因）与 `scripts/validate_ftquant_strategy.py`（从真实 `futu.zip` 读出导出名单，离线校验语法、**每个 API 调用是否真实存在**、禁用 import、是否写文件、是否有 `class Strategy(StrategyBase)`），把"只有点运行才知道拼错 API"的最差反馈回路前移到本地、秒级。修正一个真 bug：`current_price` 的第二个参数是 `THType`（时段）而非不存在的 `PriceType`

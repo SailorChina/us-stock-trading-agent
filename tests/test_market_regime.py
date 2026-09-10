@@ -54,3 +54,29 @@ def test_get_regime_returns_dict():
     if result.get("status") == "ok":
         assert "regime" in result
         assert "confidence" in result
+
+
+def test_get_regime_reports_unavailable_instead_of_faking_neutral(monkeypatch):
+    """Both inputs are unobtainable, and that must be REPORTED, not smoothed over.
+
+    This function reads US.VIX and US.SPX; futu recognises neither ("unknown
+    symbol"), so both lookups fail. That used to be silent: vix and spx_chg
+    stayed 0 and classify_regime(0, 0) hit its `vix < 20 and spx_chg > -1`
+    branch, returning a confident "neutral" every day. daily_pick's
+    "no new longs in a bear market" gate was built on exactly that reading --
+    which is why the gate could never fire.
+    """
+    import futu_pool
+    import market_regime as mr
+
+    class _FakeCtx:
+        def get_stock_quote(self, codes):       # noqa: ARG002
+            return (1, None)                    # ret != RET_OK -> unknown symbol
+
+    monkeypatch.setattr(mr, "FUTU_OK", True)
+    monkeypatch.setattr(futu_pool, "get_futu_context", lambda *a, **k: _FakeCtx())
+
+    r = mr.get_regime()
+    assert r["regime"] == "unknown", "a failed read must not become a market call"
+    assert r["status"] == "unavailable"
+    assert "VIX" in r["error"]

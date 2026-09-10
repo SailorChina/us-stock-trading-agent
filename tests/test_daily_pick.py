@@ -1,8 +1,8 @@
-"""Offline tests: daily_pick after-close scanner (v3.4.0).
+"""Offline tests: daily_pick after-close scanner.
 
 Everything network is injected, so the scan logic itself is tested without
-touching futu: universe loading, per-style ranking, regime gating, and the
-report shape.
+touching futu: universe loading, per-style ranking, the market-filter policy,
+and the dollar-sized order book.
 """
 import sys, os, json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
@@ -83,13 +83,38 @@ def test_scores_are_ranked_descending(fake_data):
         assert scores == sorted(scores, reverse=True)
 
 
-def test_bear_regime_gates_all_longs(fake_data, monkeypatch):
+def test_bear_regime_does_not_gate_longs(fake_data, monkeypatch):
+    """A market filter must NOT silently re-sample the portfolio.
+
+    This asserted the opposite until the gate was checked. Two findings killed
+    it: (1) it could never fire -- it read US.VIX / US.SPX, which futu does not
+    recognise, so both came back 0 and classify_regime(0, 0) returned
+    "neutral" every day; (2) even repaired it would hurt -- six market filters
+    measured on this signal (21d/top-5/228 names) all lowered return AND
+    significance, e.g. SPY>200d MA 44.8%->32.9% (t 2.75->1.68), SPY dd<10%
+    ->36.8% (t=2.01). Same shape as Clenow's index rule.
+    So a bear READING must still produce candidates.
+    """
     import market_regime
     monkeypatch.setattr(market_regime, "get_regime",
                         lambda: {"regime": "bear", "vix": 32.0, "status": "ok"})
     rep = _run(fake_data, lambda sym, bars: _df(seed=abs(hash(sym)) % 997))
-    assert rep["gate"]["block_new_longs"] is True
-    assert rep["conclusion"] == "NO_NEW_LONGS"
+    assert rep["gate"]["block_new_longs"] is False
+    assert rep["conclusion"] == "scan complete - see candidates"
+    assert any(rows for rows in rep["candidates"].values()), \
+        "a bear reading must not empty the list"
+
+
+def test_regime_fn_is_injectable_so_offline_runs_never_import_futu(fake_data):
+    called = []
+
+    def fake_regime():
+        called.append(1)
+        return {"regime": "not_read", "note": "offline"}
+
+    rep = _run(fake_data, lambda sym, bars: _df(seed=1), regime_fn=fake_regime)
+    assert called == [1]
+    assert rep["regime"]["regime"] == "not_read"
 
 
 def test_low_liquidity_symbols_are_filtered_out(fake_data):
@@ -161,3 +186,150 @@ def test_scan_survives_bad_fetches(fake_data):
     assert rep["scan"]["symbols_scanned"] == 4
     assert rep["scan"]["symbols_passed_filters"] == 3
     assert any(rows for rows in rep["candidates"].values())
+
+
+# --- dollar-sized order book ------------------------------------------------
+
+def test_order_sheet_is_equal_dollar_and_reports_sub_share_slots():
+    """A $600 slot cannot buy a whole $1,028 share, and that must be visible."""
+    rows = [
+        {"symbol": "US.CHEAP", "close": 100.0, "atr_pct": 3.0},
+        {"symbol": "US.PRICEY", "close": 1028.0, "atr_pct": 4.0},
+    ]
+    sheet = dp.order_sheet(rows, 1200.0)
+    assert [o["symbol"] for o in sheet] == ["US.CHEAP", "US.PRICEY"]
+    assert all(o["amount"] == 600.0 for o in sheet), "must be equal DOLLAR weight"
+    assert sheet[0]["whole_share_ok"] is True            # 6 shares
+    assert sheet[1]["whole_share_ok"] is False           # 0.58 shares
+    assert sheet[1]["est_shares"] == pytest.approx(0.5837, abs=1e-3)
+    # stop is 2x ATR below entry
+    assert sheet[0]["stop_loss"] == pytest.approx(100.0 * (1 - 0.06), abs=0.01)
+    assert sheet[1]["stop_loss"] == pytest.approx(1028.0 * (1 - 0.08), abs=0.01)
+
+
+def test_order_sheet_handles_degenerate_input():
+    assert dp.order_sheet([], 3000.0) == []
+    assert dp.order_sheet([{"symbol": "US.A", "close": 10.0}], 0.0) == []
+    # a nameless row with no price must not raise -- it just cannot be sized
+    out = dp.order_sheet([{"symbol": "US.A", "close": 0.0}], 100.0)
+    assert out[0]["est_shares"] == 0.0 and out[0]["whole_share_ok"] is False
+
+
+def test_capital_puts_a_book_in_the_report(fake_data):
+    rep = _run(fake_data, lambda sym, bars: _df(seed=abs(hash(sym)) % 997),
+               top=2, capital=3000.0)
+    book = rep["book"]
+    assert book["style"] == dp.DEFAULT_STYLES[0]
+    assert book["capital"] == 3000.0
+    assert book["orders"], "capital must produce orders"
+    assert sum(o["amount"] for o in book["orders"]) == pytest.approx(3000.0, abs=1.0)
+
+
+def test_no_capital_means_no_book(fake_data):
+    rep = _run(fake_data, lambda sym, bars: _df(seed=abs(hash(sym)) % 997))
+    assert rep["book"] == {}
+
+
+def test_cache_fetcher_reads_the_offline_cache(tmp_path):
+    """--from-cache is the only way to run the pipeline without OpenD."""
+    (tmp_path / "US_TEST.csv").write_text(
+        "time_key,open,high,low,close,volume,last_close\n"
+        + "\n".join(f"2026-01-{i+1:02d} 00:00:00,1,1,1,{100+i},1000,1" for i in range(10)),
+        encoding="utf-8")
+    fetch = dp._cache_fetcher(str(tmp_path))
+    df = fetch("US.TEST", 5)
+    assert list(df["close"]) == [105.0, 106.0, 107.0, 108.0, 109.0], "must tail(bars)"
+    assert fetch("US.MISSING", 5) is None
+
+
+# --- rate-limited fetching --------------------------------------------------
+
+def test_paced_fetcher_retries_a_none_once():
+    """A None from the API is USUALLY the rate limit, not a dead ticker."""
+    calls = []
+
+    def fetch(sym, bars):
+        calls.append(sym)
+        return None if len(calls) == 1 else "df"
+
+    f = dp._PacedFetcher(fetch=fetch, cooldown_s=0.0)
+    assert f("US.A", 800) == "df"
+    assert calls == ["US.A", "US.A"], "must retry the SAME symbol"
+    assert f.cooldowns_used == 1
+    assert f.failed == 0
+
+
+def test_paced_fetcher_gives_up_so_dead_universes_do_not_sleep_forever():
+    calls = []
+
+    def fetch(sym, bars):
+        calls.append(sym)
+        return None
+
+    f = dp._PacedFetcher(fetch=fetch, cooldown_s=0.0, max_cooldowns=2)
+    for s in ("US.A", "US.B", "US.C"):
+        assert f(s, 800) is None
+    assert f.cooldowns_used == 2, "cooldowns must be capped"
+    assert calls == ["US.A", "US.A", "US.B", "US.B", "US.C"], \
+        "after the cap the remaining names are tried once, not slept on"
+    assert f.failed == 3
+
+
+def test_paced_fetcher_spaces_requests_inside_a_window():
+    """30 calls / 30s is the budget; a 3rd call in a tiny window must wait."""
+    import time as _t
+    calls = []
+    f = dp._PacedFetcher(fetch=lambda s, b: calls.append(s) or "df",
+                         max_per_window=2, window_s=0.3, cooldown_s=0.0)
+    t0 = _t.monotonic()
+    for s in ("US.A", "US.B", "US.C"):
+        f(s, 800)
+    assert len(calls) == 3
+    assert _t.monotonic() - t0 >= 0.25, "the third call must be paced, not fired"
+
+
+def test_scan_separates_unfetchable_from_filtered_out(fake_data, monkeypatch):
+    """Conflating these hid a broken online path that gutted the universe.
+
+    The online run used to report "228 scanned, 48 passed, 180 dropped", which
+    reads like a strict liquidity filter. In fact 180 FETCHES had been refused
+    by the rate limit, so the candidate list came from the surviving handful and
+    disagreed with the offline list. The counters must be distinct.
+    """
+    good = _df(seed=1)
+    penny = _df(seed=2)
+    penny["close"] = 0.5                       # passes fetch, fails liquidity
+
+    def fetcher(sym, bars):
+        if sym == "US.A":
+            return good
+        if sym == "US.B":
+            return penny
+        return None                            # US.C, US.D: fetch refused
+
+    rep = _run(fake_data, fetcher)
+    scan = rep["scan"]
+    assert scan["symbols_scanned"] == 4
+    assert scan["symbols_passed_filters"] == 1
+    assert scan["symbols_filtered_out"] == 1
+    assert scan["symbols_unfetchable"] == 2
+    assert scan["symbols_dropped"] == 3
+
+
+# --- bar completeness -------------------------------------------------------
+
+def test_bar_completeness_warning_flags_an_open_session():
+    """A partial intraday bar must not pass silently as a close.
+
+    Daily bars carry the session's own date; during the US session the last bar
+    is a PARTIAL day being fed into 12-1 momentum as though it were final.
+    Nothing errors -- the signal is just quietly wrong, which is worse.
+    """
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    msg = dp._bar_completeness_warning(today)
+    # only meaningful while the US session is open; skip otherwise
+    if datetime.now(timezone.utc).hour < 21:
+        assert "INCOMPLETE" in msg
+    assert dp._bar_completeness_warning("2020-01-02") == ""
+    assert dp._bar_completeness_warning(None) == ""
