@@ -32,11 +32,13 @@ def _uptrend(base, n, rng):
     return base * np.cumprod(1 + rng.normal(0.0035, 0.012, n))
 
 
-def _pullback_in_uptrend(base, n, rng):
+def _pullback_in_uptrend(base, n, rng, last_bar=1.012):
+    """Uptrend with a compounding pullback that ENDS on an up day (stabilising)."""
     c = base * np.cumprod(1 + rng.normal(0.004, 0.01, n))
     peak = c[-7]
-    for j in range(1, 7):                      # compounding 6-day pullback
-        c[-j] = peak * (0.965 ** j)
+    for j in range(6, 1, -1):                  # declining bars
+        c[-j] = peak * (0.965 ** (7 - j))
+    c[-1] = c[-2] * last_bar                   # stabilising day
     return c
 
 
@@ -103,6 +105,29 @@ def test_reversal_rejects_falling_knife():
                for reason in r["reasons"])
 
 
+def test_reversal_waits_for_stabilisation():
+    """A pullback that is STILL FALLING must not be a candidate."""
+    still = _df(lambda b, n, r: _pullback_in_uptrend(b, n, r, last_bar=0.975))
+    r = sel.reversal_score(still)
+    assert r["score"] == 0.0
+    assert any("still falling" in reason for reason in r["reasons"])
+
+
+def test_reversal_rewards_reclaiming_ma5():
+    """The confirmation branch must distinguish a MA5 reclaim from a weak up day.
+
+    Note: a violent bounce scores LOWER overall on purpose — it has already
+    eaten into the pullback discount and the oversold reading, so the entry is
+    worse. What must differ is the confirmation branch itself.
+    """
+    weak = _df(lambda b, n, r: _pullback_in_uptrend(b, n, r, last_bar=1.005))
+    strong = _df(lambda b, n, r: _pullback_in_uptrend(b, n, r, last_bar=1.08))
+    rw, rs = sel.reversal_score(weak), sel.reversal_score(strong)
+    assert any("reclaimed MA5" in reason for reason in rs["reasons"])
+    assert any("still below MA5" in reason for reason in rw["reasons"])
+    assert rs["score"] > 0 and rw["score"] > 0
+
+
 def test_reversal_ignores_a_quiet_uptrend():
     """No pullback (making highs) -> no reversal setup."""
     r = sel.reversal_score(_df(_uptrend))
@@ -131,3 +156,21 @@ def test_context_for_entry_basic():
     assert ctx["close"] > 0
     assert ctx["atr"] > 0
     assert isinstance(ctx["returns"], list) and len(ctx["returns"]) > 0
+
+
+# --- sector buckets (signal clusters by sector) -----------------------------
+
+def test_sector_of_maps_known_names():
+    assert sel.sector_of("US.NVDA") == "semis"
+    assert sel.sector_of("US.AMD") == "semis"
+    assert sel.sector_of("US.JPM") == "financials"
+
+
+def test_sector_of_groups_semis_together():
+    """The cluster that blew up in the event study must share one bucket."""
+    names = ["US.NVDA", "US.AMD", "US.INTC", "US.MU", "US.AMAT", "US.MRVL"]
+    assert len({sel.sector_of(n) for n in names}) == 1
+
+
+def test_sector_of_defaults_to_other():
+    assert sel.sector_of("US.NOTREAL") == "other"

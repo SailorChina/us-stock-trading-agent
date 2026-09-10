@@ -184,7 +184,7 @@ def reversal_score(df: pd.DataFrame) -> Dict:
     if dd20 > -0.03:
         reasons.append("no pullback (near 20d high)")
         return {"score": 0.0, "reasons": reasons, "stats": stats}
-    score += min(30.0, abs(dd20) * 30.0 / 0.12)          # deeper pullback -> more
+    score += min(20.0, abs(dd20) * 20.0 / 0.12)          # deeper pullback -> more
     reasons.append(f"{dd20 * 100:.1f}% off 20d high")
 
     # gate 3: short-term oversold
@@ -199,12 +199,28 @@ def reversal_score(df: pd.DataFrame) -> Dict:
     if rsi14 is not None:
         stats["rsi14"] = round(rsi14, 1)
     if z <= -1.5 or (rsi14 is not None and rsi14 <= 35):
-        score += 30
+        score += 20
         reasons.append(f"oversold (z={z:.1f}, rsi={rsi14:.0f})")
     else:
         reasons.append("not yet oversold")
     if rsi14 is not None and rsi14 <= 15:
-        score += 10
+        score += 5
+
+    # gate 4: STABILISATION — the lesson from the 60-name event study.
+    # Buying a pullback while it is still falling produced clustered -10%+
+    # losses (all five worst names were semis). Require an UP DAY: the bar
+    # must close above the previous close, i.e. someone is finally bidding.
+    rising = bool(n >= 2 and c[-1] > c[-2])
+    if not rising:
+        reasons.append("still falling - wait for confirmation")
+        return {"score": 0.0, "reasons": reasons, "stats": stats}
+    ma5 = _ma(c, 5)
+    if ma5 and c[-1] > ma5:
+        score += 30
+        reasons.append("stabilising: up day + reclaimed MA5")
+    else:
+        score += 12
+        reasons.append("up day, still below MA5")
 
     # trend health bonus within the pullback (higher lows vs MA50)
     ma50 = _ma(c, 50)
@@ -279,6 +295,57 @@ def quality_score(df: pd.DataFrame, min_price: float = 3.0,
             score += min(10.0, max(0.0, sharpe))
 
     return {"score": round(min(100.0, score), 1), "reasons": reasons[:4], "stats": stats}
+
+
+# Coarse sector buckets. Reversal signals clustered hard by sector in the
+# 60-name event study (the five worst names were all semis, each -10%+), so
+# diversification has to be enforced at the picker level, not hoped for.
+SECTORS: Dict[str, str] = {
+    "US.NVDA": "semis", "US.AMD": "semis", "US.INTC": "semis", "US.QCOM": "semis",
+    "US.TXN": "semis", "US.AMAT": "semis", "US.MU": "semis", "US.MRVL": "semis",
+    "US.AVGO": "semis", "US.KLAC": "semis", "US.LRCX": "semis", "US.MCHP": "semis",
+    "US.NXPI": "semis", "US.ADI": "semis", "US.TSM": "semis", "US.ARM": "semis",
+    "US.MSFT": "software", "US.ORCL": "software", "US.CRM": "software",
+    "US.ADBE": "software", "US.NOW": "software", "US.INTU": "software",
+    "US.WDAY": "software", "US.TEAM": "software", "US.SNOW": "software",
+    "US.NET": "software", "US.DDOG": "software", "US.CRWD": "software",
+    "US.PANW": "software", "US.ZS": "software", "US.MDB": "software",
+    "US.SHOP": "software", "US.PLTR": "software", "US.SNPS": "software",
+    "US.CDNS": "software", "US.ANET": "networking", "US.AAPL": "hardware",
+    "US.GOOGL": "internet", "US.META": "internet", "US.AMZN": "internet",
+    "US.NFLX": "internet", "US.SPOT": "internet", "US.RBLX": "internet",
+    "US.ABNB": "internet", "US.DASH": "internet", "US.PYPL": "payments",
+    "US.SQ": "payments", "US.MA": "payments", "US.V": "payments",
+    "US.JPM": "financials", "US.BAC": "financials", "US.WFC": "financials",
+    "US.GS": "financials", "US.MS": "financials", "US.C": "financials",
+    "US.AXP": "financials", "US.BLK": "financials", "US.SCHW": "financials",
+    "US.MCO": "financials", "US.MMC": "financials", "US.PLD": "reits",
+    "US.AMT": "reits", "US.CCI": "reits", "US.EQIX": "reits", "US.CBRE": "reits",
+    "US.UNH": "healthcare", "US.LLY": "healthcare", "US.JNJ": "healthcare",
+    "US.PFE": "healthcare", "US.MRK": "healthcare", "US.ABBV": "healthcare",
+    "US.AMGN": "healthcare", "US.TMO": "healthcare", "US.DHR": "healthcare",
+    "US.ISRG": "healthcare", "US.MDT": "healthcare", "US.SYK": "healthcare",
+    "US.VRTX": "healthcare", "US.REGN": "healthcare", "US.GILD": "healthcare",
+    "US.BIIB": "healthcare", "US.CVS": "healthcare",
+    "US.WMT": "consumer", "US.COST": "consumer", "US.PG": "consumer",
+    "US.KO": "consumer", "US.PEP": "consumer", "US.MCD": "consumer",
+    "US.SBUX": "consumer", "US.NKE": "consumer", "US.HD": "consumer",
+    "US.LOW": "consumer", "US.TGT": "consumer", "US.CMG": "consumer",
+    "US.DIS": "consumer", "US.LULU": "consumer", "US.TJX": "consumer",
+    "US.CL": "consumer", "US.EL": "consumer", "US.TSLA": "autos",
+    "US.XOM": "energy", "US.CVX": "energy", "US.COP": "energy", "US.SLB": "energy",
+    "US.CAT": "industrial", "US.DE": "industrial", "US.HON": "industrial",
+    "US.BA": "industrial", "US.GE": "industrial", "US.RTX": "industrial",
+    "US.LMT": "industrial", "US.UNP": "industrial", "US.ADP": "industrial",
+    "US.FISV": "industrial", "US.UBER": "transport", "US.DAL": "transport",
+    "US.T": "telecom", "US.VZ": "telecom", "US.TMUS": "telecom",
+    "US.COIN": "crypto", "US.MSTR": "crypto",
+}
+
+
+def sector_of(symbol: str) -> str:
+    """Coarse sector bucket; unmapped names fall into 'other'."""
+    return SECTORS.get(str(symbol).upper(), "other")
 
 
 STYLES: Dict[str, Callable[[pd.DataFrame], Dict]] = {
