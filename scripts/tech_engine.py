@@ -43,6 +43,14 @@ def fetch_kline(symbol, ktype="1d", num=60, start_date=None, end_date=None):
         ctx = _get_futu_ctx()
         if ctx is None:
             return None
+        # futu's default window is only ~1 year (≈251 daily bars, 52 weekly)
+        # regardless of `num`, which silently breaks every factor needing a
+        # longer lookback (12-1 momentum needs 274 bars, a 52-week high needs
+        # 252). Supplying an explicit range returns the full history, so
+        # derive one whenever the caller asks for more than a year.
+        if start_date is None and end_date is None and num and num > 250:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=int(num * 1.6) + 30)).strftime("%Y-%m-%d")
         try:
             page_size = min(num, 1000)
             ret, df, next_key = ctx.request_history_kline(symbol, start=start_date, end=end_date,
