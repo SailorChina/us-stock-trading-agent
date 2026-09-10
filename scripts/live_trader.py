@@ -29,6 +29,25 @@ Usage:
 
     # 3. real money (requires unlock; be deliberate)
     python scripts/live_trader.py --top 10 --execute --env real --unlock YOUR_PWD
+
+    # small account: plan a $3,000 book and print the by-amount order sheet
+    python scripts/live_trader.py --top 5 --capital 3000 --fractional --from-cache
+
+FRACTIONAL SHARES -- measured against the live API, not assumed:
+    qty=0.29  -> rejected, "invalid quantity"
+    qty=1.5   -> ACCEPTED but silently truncated to 1.0 share
+    qty=2     -> accepted normally
+So the OpenAPI trades whole shares only, and any fractional qty >= 1 is
+silently rounded DOWN -- never pass a float to place_order.
+
+For a $3,000 account that forces a split: SELECTION happens here (the signal
+was validated on the full 228-name universe, which the Futu Quant GUI cannot
+reach because its drive symbols are declared by hand), and EXECUTION happens in
+the Futu app's "by amount" order mode, which does support fractional size
+($5 minimum; no commission below 1 share, $1 platform fee per order). The
+signal is unaffected by that choice: backtest_engine measures each period as
+the equal-weighted mean across held names, i.e. the same dollar in every name,
+which is exactly what an amount-based order buys.
 """
 from __future__ import annotations
 
@@ -187,7 +206,17 @@ def rank_universe(hist: Dict[str, list]) -> List[dict]:
 
 def plan(ranked: List[dict], holdings: Dict[str, float], capital: float,
          top_n: int) -> dict:
-    """Decide buys and sells. Pure function -- unit tested without any network."""
+    """Decide buys and sells. Pure function -- unit tested without any network.
+
+    Whole-share sizing only, because that is all the OpenAPI can submit:
+    place_order takes an integer qty. A $3,000 account therefore CANNOT hold
+    this top-10 list as shares -- the validated names trade at $235-$1,028, so
+    a $300 slot buys zero of most of them. Those targets are reported in
+    `unaffordable` rather than silently skipped, and `cash_left` makes the drag
+    visible. The fix is not to substitute cheaper names (price is not a signal
+    here, so that would quietly change what was validated) but to trade the
+    same names in FRACTIONAL size through the Futu app -- see order_sheet().
+    """
     targets = ranked[:top_n]
     target_syms = {t["symbol"] for t in targets}
     held_syms = {s for s, q in holdings.items() if q and q > 0}
@@ -212,10 +241,16 @@ def plan(ranked: List[dict], holdings: Dict[str, float], capital: float,
     per_name = budget_total / len(to_buy) if to_buy else 0.0
 
     buys = []
+    unaffordable = []
     for t in to_buy:
         px = t["close"]
         qty = int(per_name // px) if px > 0 else 0
         if qty <= 0:
+            unaffordable.append({
+                "symbol": t["symbol"], "close": round(px, 2),
+                "budget_per_name": round(per_name, 2),
+                "momentum_pct": round(t["momentum"] * 100, 1),
+            })
             continue
         stop = px - ATR_STOP_MULT * t["atr"] if t["atr"] else px * 0.92
         buys.append({
@@ -224,14 +259,47 @@ def plan(ranked: List[dict], holdings: Dict[str, float], capital: float,
             "momentum_pct": round(t["momentum"] * 100, 1),
         })
 
+    deployed = round(sum(b["notional"] for b in buys), 2)
     return {
         "sells": sells,
         "holds": holds,
         "buys": buys,
+        "unaffordable": unaffordable,
         "budget_total": round(budget_total, 2),
         "per_name": round(per_name, 2),
+        "deployed": deployed,
+        "cash_left": round(budget_total - deployed, 2),
         "targets": [t["symbol"] for t in targets],
     }
+
+
+def order_sheet(ranked: List[dict], capital: float, top_n: int) -> List[dict]:
+    """Equal-weight by DOLLAR, for brokers that accept fractional/amount orders.
+
+    This is the shape the Futu app's "by amount" mode wants, and it is also
+    exactly what the backtest measured: backtest_engine computes each period's
+    return as the equal-weighted mean across the held names, i.e. the same
+    dollar in every name. So trading this sheet reproduces the validated
+    portfolio -- no substitution, no cash drag. Pure function, unit tested.
+    """
+    if top_n <= 0 or capital <= 0:
+        return []
+    targets = ranked[:top_n]
+    per = capital / len(targets)
+    out = []
+    for t in targets:
+        px = t["close"]
+        stop = px - ATR_STOP_MULT * t["atr"] if t["atr"] else px * 0.92
+        out.append({
+            "symbol": t["symbol"],
+            "amount": round(per, 2),
+            "ref_price": round(px, 2),
+            "est_shares": round(per / px, 4) if px > 0 else 0.0,
+            "whole_share_ok": bool(px > 0 and per >= px),
+            "stop": round(max(stop, 0.01), 2),
+            "momentum_pct": round(t["momentum"] * 100, 1),
+        })
+    return out
 
 
 def _concentration_warning(symbols: List[str], threshold: int = 5) -> str:
@@ -305,13 +373,20 @@ def execute_plan(ft, quote_ctx, trade_ctx, trd_env, plan_data: dict) -> List[str
             log.append("SELL %s -> EXC %s" % (sym, e))
 
     for b in plan_data["buys"]:
+        # int() is not cosmetic. place_order TRUNCATES a fractional qty instead
+        # of erroring (qty=1.5 came back as a 1-share order) and rejects qty<1
+        # outright, so a float here would quietly buy less than planned.
+        qty = int(b["qty"])
+        if qty <= 0:
+            log.append("BUY %s -> skipped (qty rounds to 0)" % b["symbol"])
+            continue
         try:
             ret, data = trade_ctx.place_order(
-                price=b["ref_price"], qty=b["qty"], code=b["symbol"],
+                price=b["ref_price"], qty=qty, code=b["symbol"],
                 trd_side=ft.TrdSide.BUY, order_type=ft.OrderType.MARKET,
                 trd_env=trd_env)
             log.append("BUY %s x%s -> %s" % (
-                b["symbol"], b["qty"], "ok" if ret == ft.RET_OK else data))
+                b["symbol"], qty, "ok" if ret == ft.RET_OK else data))
         except Exception as e:
             log.append("BUY %s -> EXC %s" % (b["symbol"], e))
     return log
@@ -326,6 +401,10 @@ def main(argv=None) -> int:
     ap.add_argument("--top", type=int, default=10, help="how many names to hold (10 is validated)")
     ap.add_argument("--universe", default=DEFAULT_UNIVERSE)
     ap.add_argument("--limit", type=int, default=0, help="cap universe size (debug)")
+    ap.add_argument("--capital", type=float, default=0.0,
+                    help="override the budget, e.g. 3000 for a $3,000 account (0 = account cash)")
+    ap.add_argument("--fractional", action="store_true",
+                    help="print the by-amount order sheet for Futu app fractional trading")
     ap.add_argument("--from-cache", action="store_true", help="use data/_hist_cache instead of the network")
     ap.add_argument("--execute", action="store_true", help="actually place orders (default: plan only)")
     ap.add_argument("--env", choices=["simulate", "real"], default="simulate")
@@ -369,7 +448,13 @@ def main(argv=None) -> int:
 
         holdings = get_holdings(ft, trade_ctx, trd_env)
         cash = get_cash(ft, trade_ctx, trd_env)
-        plan_data = plan(ranked, holdings, cash, args.top)
+        # --capital overrides the PLANNING budget only. The paper account holds
+        # 1,000,000, so planning a $3,000 account against it would size every
+        # position ~300x too large. With the flag the plan is honest and the
+        # account is left untouched.
+        budget = args.capital if args.capital and args.capital > 0 else cash
+        plan_data = plan(ranked, holdings, budget, args.top)
+        sheet = order_sheet(ranked, budget, args.top) if args.fractional else []
 
         if args.json:
             print(json.dumps({"ranked": ranked[:args.top], "plan": plan_data,
@@ -377,15 +462,15 @@ def main(argv=None) -> int:
         else:
             print("=== mom_12_1_raw | env=%s | %s ===" % (
                 args.env, "EXECUTE" if args.execute else "DRY RUN (nothing will be sent)"))
-            print("scored %d of %d names | cash %.2f | holding %d" % (
-                len(ranked), len(symbols), cash, len(holdings)))
+            print("scored %d of %d names | account cash %.2f | planning budget %.2f | holding %d" % (
+                len(ranked), len(symbols), cash, plan_data["budget_total"], len(holdings)))
             print("\ntop %d by 12-1 momentum:" % args.top)
             for i, r in enumerate(ranked[:args.top], 1):
                 print("  %2d. %-9s %+7.1f%%   close %.2f   ATR %.2f" % (
                     i, r["symbol"], r["momentum"] * 100, r["close"], r["atr"] or 0))
-            print("\nplan: sell %d, buy %d, keep %d | budget %.2f (%.2f per new name)" % (
+            print("\nplan: sell %d, buy %d, keep %d | %.2f per new name" % (
                 len(plan_data["sells"]), len(plan_data["buys"]),
-                len(plan_data["holds"]), plan_data["budget_total"], plan_data["per_name"]))
+                len(plan_data["holds"]), plan_data["per_name"]))
             for s in plan_data["sells"]:
                 print("  SELL  %s" % s)
             for b in plan_data["buys"]:
@@ -393,6 +478,35 @@ def main(argv=None) -> int:
                     b["symbol"], b["qty"], b["ref_price"], b["notional"], b["stop"], b["momentum_pct"]))
             for s in plan_data["holds"]:
                 print("  KEEP  %s" % s)
+
+            na = plan_data["unaffordable"]
+            if na:
+                print("\n%d of %d targets are UNAFFORDABLE as whole shares (slot %.2f):" % (
+                    len(na), args.top, plan_data["per_name"]))
+                for u in na:
+                    print("  SKIP  %-9s $%-8.2f needs 1 full share (mom %+.1f%%)" % (
+                        u["symbol"], u["close"], u["momentum_pct"]))
+                drag = (100.0 * plan_data["cash_left"] / plan_data["budget_total"]
+                        if plan_data["budget_total"] else 0.0)
+                print("  -> whole shares deploy %.0f of %.0f = %.0f%% cash drag." % (
+                    plan_data["deployed"], plan_data["budget_total"], drag))
+                print("  -> price is NOT part of this signal, so substituting cheaper")
+                print("     names would change what was validated. Trade the SAME names")
+                print("     in fractional size instead: re-run with --fractional.")
+
+            if sheet:
+                n_under = sum(1 for r in sheet if not r["whole_share_ok"])
+                print("\nfractional order sheet (equal dollar weight, %d names):" % len(sheet))
+                print("  %-9s %10s %10s %10s %10s %8s" % (
+                    "symbol", "amount$", "price", "est_shrs", "stop", "mom%"))
+                for r in sheet:
+                    print("  %-9s %10.2f %10.2f %10.4f %10.2f %+8.1f" % (
+                        r["symbol"], r["amount"], r["ref_price"],
+                        r["est_shares"], r["stop"], r["momentum_pct"]))
+                print("  %d of %d are under 1 share: in the Futu app use the 'by amount'" % (
+                    n_under, len(sheet)))
+                print("  order mode. Sub-1-share orders carry no commission (a $1")
+                print("  platform fee per order applies).")
 
             warn = _concentration_warning([t["symbol"] for t in ranked[:args.top]])
             if warn:

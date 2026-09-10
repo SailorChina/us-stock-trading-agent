@@ -167,6 +167,102 @@ def test_plan_skips_names_that_are_too_expensive_for_one_share():
     assert p["buys"] == []
 
 
+# ---------------------------------------------------------------------------
+# small-account behaviour (whole-share reality of a $3,000 book)
+# ---------------------------------------------------------------------------
+
+def test_plan_reports_unaffordable_targets_instead_of_hiding_them():
+    """On 2026-09-10 eight of ten validated names cost more than the $300 slot
+    a $3,000 account gives them. Silently dropping them would have reported a
+    'buy 2' plan as if it were the strategy."""
+    ranked = _ranked(("US.PRICEY", 0.9, 1027.77), ("US.CHEAP", 0.8, 106.24))
+    p = lt.plan(ranked, holdings={}, capital=600.0, top_n=2)
+    assert [u["symbol"] for u in p["unaffordable"]] == ["US.PRICEY"]
+    assert p["unaffordable"][0]["close"] == pytest.approx(1027.77)
+
+
+def test_plan_cash_left_makes_the_drag_visible():
+    ranked = _ranked(("US.PRICEY", 0.9, 1027.77), ("US.CHEAP", 0.8, 106.24))
+    p = lt.plan(ranked, holdings={}, capital=600.0, top_n=2)
+    # $300 slot buys 2 shares of the cheap name; the pricey one is skipped
+    assert p["deployed"] == pytest.approx(212.48, abs=0.01)
+    assert p["cash_left"] == pytest.approx(600.0 - 212.48, abs=0.01)
+
+
+def test_plan_is_fully_deployed_when_every_slot_is_affordable():
+    ranked = _ranked(("US.A", 0.9, 100.0), ("US.B", 0.8, 50.0))
+    p = lt.plan(ranked, holdings={}, capital=10000.0, top_n=2)
+    assert p["unaffordable"] == []
+    # 5000 slot -> 50 and 100 shares exactly
+    assert p["deployed"] == pytest.approx(10000.0)
+    assert p["cash_left"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_order_sheet_is_equal_dollar_weight():
+    """The sheet must match what the backtest measured: the same dollar in
+    every name (backtest_engine averages forward returns equally)."""
+    ranked = _ranked(("US.A", 0.9, 1000.0), ("US.B", 0.8, 100.0), ("US.C", 0.7, 10.0))
+    sheet = lt.order_sheet(ranked, capital=3000.0, top_n=3)
+    assert [r["amount"] for r in sheet] == [pytest.approx(1000.0)] * 3
+
+
+def test_order_sheet_flags_which_names_need_fractional_size():
+    """whole_share_ok is False exactly when one full share costs more than the
+    slot -- those are the ones that must go through the app's amount mode."""
+    ranked = _ranked(("US.A", 0.9, 1000.0), ("US.B", 0.8, 100.0))
+    sheet = lt.order_sheet(ranked, capital=1000.0, top_n=2)
+    by = {r["symbol"]: r for r in sheet}
+    assert by["US.A"]["whole_share_ok"] is False    # slot 500 < price 1000
+    assert by["US.B"]["whole_share_ok"] is True
+    assert by["US.A"]["est_shares"] == pytest.approx(0.5)
+
+
+def test_order_sheet_only_covers_the_top_n():
+    ranked = _ranked(("US.A", 0.9, 100.0), ("US.B", 0.8, 100.0), ("US.C", 0.7, 100.0))
+    sheet = lt.order_sheet(ranked, capital=900.0, top_n=2)
+    assert [r["symbol"] for r in sheet] == ["US.A", "US.B"]
+
+
+def test_order_sheet_places_the_same_atr_stop_as_the_share_plan():
+    ranked = [{"symbol": "US.A", "momentum": 0.9, "close": 100.0, "atr": 5.0}]
+    sheet = lt.order_sheet(ranked, capital=1000.0, top_n=1)
+    assert sheet[0]["stop"] == pytest.approx(100.0 - lt.ATR_STOP_MULT * 5.0)
+
+
+def test_order_sheet_refuses_a_degenerate_request():
+    ranked = _ranked(("US.A", 0.9, 100.0))
+    assert lt.order_sheet(ranked, capital=0.0, top_n=1) == []
+    assert lt.order_sheet(ranked, capital=1000.0, top_n=0) == []
+
+
+def test_capital_flag_exists_and_defaults_to_account_cash():
+    """$3,000 planning against a 1,000,000 paper account needs the override;
+    defaulting to 0 keeps 'use the account balance' as the normal path."""
+    import inspect
+    src = inspect.getsource(lt.main)
+    assert '"--capital"' in src
+    assert 'default=0.0' in src
+
+
+# ---------------------------------------------------------------------------
+# fractional -- measured against the live API, so the guard must stay
+# ---------------------------------------------------------------------------
+
+def test_execute_plan_coerces_qty_to_int():
+    """place_order truncates a fractional qty silently (qty=1.5 was accepted
+    as a 1-share order) and rejects qty<1. A float reaching the broker would
+    quietly buy less than planned, so execute_plan must int() it."""
+    import inspect
+    src = inspect.getsource(lt.execute_plan)
+    assert "int(b[\"qty\"])" in src
+
+
+def test_plan_qty_is_always_an_integer():
+    ranked = _ranked(("US.A", 0.9, 333.0), ("US.B", 0.8, 77.0))
+    p = lt.plan(ranked, holdings={}, capital=1000.0, top_n=2)
+    assert all(isinstance(b["qty"], int) for b in p["buys"])
+
+
 def test_plan_places_the_stop_below_entry():
     ranked = _ranked(("US.A", 0.9, 100.0))
     p = lt.plan(ranked, holdings={}, capital=10000.0, top_n=1)
