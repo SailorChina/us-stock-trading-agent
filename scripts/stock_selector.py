@@ -506,6 +506,32 @@ STYLES: Dict[str, Callable[[pd.DataFrame], Dict]] = {
     "low_vol": low_vol_score,
 }
 
+# Quantified versions of well-known public trading systems (Clenow's hedge-fund
+# momentum, Minervini's trend template, Qullamaggie's High Tight Flag, the
+# 20-EMA pullback, VCP, Turtle channel breakout). Registered here so the
+# validator and the picker exercise them through the SAME code path as our own
+# factors -- but deliberately kept OUT of daily_pick.DEFAULT_STYLES, because on
+# 228 names / 11.6 years none of them reached statistical significance:
+#
+#   ranker        CAGR   Sharpe   MDD      excess t   boot p
+#   mom_12_1_raw  34.3%   1.12   -28.4%      2.36      0.014
+#   minervini     24.5%   0.93   -23.0%      1.24      0.113
+#   htf           18.8%   0.92   -24.7%      0.51      0.292
+#   vcp           18.8%   0.83   -25.4%      0.45      0.322
+#   clenow        18.7%   0.87   -33.9%      0.37      0.357
+#   pullback_ema  13.7%   0.74   -21.5%     -0.73      0.767
+#   turtle55       9.3%   0.55   -26.7%     -1.75      0.956
+#
+# They stay selectable (--styles clenow etc.) so the comparison keeps being
+# re-measured as data accumulates, and so anyone can verify the claim.
+try:
+    from trader_systems import SYSTEMS as _TRADER_SYSTEMS
+    for _k, _v in _TRADER_SYSTEMS.items():
+        STYLES.setdefault(_k, _v)
+except Exception:                                # never break a plain import
+    pass
+
+
 
 def score_style(style: str, df: pd.DataFrame) -> Dict:
     """Public dispatch used by both the picker and the validator."""

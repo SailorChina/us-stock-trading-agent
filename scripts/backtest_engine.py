@@ -155,7 +155,9 @@ def backtest_style(style: str, cache: Dict[str, pd.DataFrame], horizon: int = 21
                    top_n: int = 10, min_names: int = 30,
                    cost_bps: float = COST_BPS_ONE_WAY,
                    top_quantile: Optional[float] = None,
-                   index_members: Optional[Dict[str, List[str]]] = None) -> Dict:
+                   index_members: Optional[Dict[str, List[str]]] = None,
+                   scorer: Optional[Callable] = None,
+                   gate: Optional[Callable] = None) -> Dict:
     """Buy the top-N ranked names every `horizon` bars; measure what a trader gets.
 
     Unlike rank IC, this reports the *tradeable* outcome: annualised return,
@@ -164,11 +166,22 @@ def backtest_style(style: str, cache: Dict[str, pd.DataFrame], horizon: int = 21
 
     `index_members` (date -> [symbols]) applies point-in-time membership when
     supplied, which removes survivorship/look-ahead contamination.
+
+    `scorer` lets a caller pass a ranker directly (e.g. one from
+    trader_systems.py) without registering it in stock_selector.STYLES.
+
+    `gate` is an optional callable(date) -> bool. When it returns False the
+    portfolio sits in cash for that period (0% return) while the benchmark
+    keeps running. This is how a portfolio-level market filter -- such as
+    Clenow's "only open new positions while the index is above its 200-day
+    MA" -- gets evaluated, since it is a switch on the whole book rather than
+    a per-stock score.
     """
-    from stock_selector import STYLES
-    scorer = None if style == "composite" else STYLES.get(style)
-    if style != "composite" and scorer is None:
-        return {"status": "unknown_style", "style": style, "known": sorted(STYLES)}
+    if scorer is None:
+        from stock_selector import STYLES
+        scorer = None if style == "composite" else STYLES.get(style)
+        if style != "composite" and scorer is None:
+            return {"status": "unknown_style", "style": style, "known": sorted(STYLES)}
 
     fetched = cached_fetcher(cache)
     per_symbol: Dict[str, Dict] = {}
@@ -206,6 +219,19 @@ def backtest_style(style: str, cache: Dict[str, pd.DataFrame], horizon: int = 21
                 continue
             pairs.append((sym, m[d]["score"], m[d]["fwd_ret"]))
         if len(pairs) < min_names:
+            continue
+
+        bench = float(np.mean([p[2] for p in pairs]))
+
+        # market filter: when risk-off, hold cash for the period and drop the
+        # book, so the next rebalance pays full re-entry turnover
+        if gate is not None and not gate(d):
+            port_rets.append(0.0)
+            bench_rets.append(bench)
+            turnovers.append(0.0)
+            holding_sizes.append(0)
+            ics.append(None)
+            prev_hold = set()
             continue
 
         # rank IC
