@@ -200,6 +200,94 @@ bootstrap p=0.008 独立确认，11/12 个自然年为正，且样本内 (t=3.00
 **实践含义：不需要为了"更专业"而堆叠复杂形态。在我们能验证的范围内，
 最简单的信号最强。任何新增的复杂度都必须自带统计证据，否则默认拒绝。**
 
+## 5.5 富途量化（FTQuant）平台 API 速查（2026-09-10 逆向自客户端）
+
+用户提供富途牛牛客户端的"量化"界面截图后，我们直接**从客户端自带的 SDK 中提取了完整 API**，
+位置（版本目录随客户端更新变化）：
+
+```
+C:/Program Files/FTNN/app/<版本号>/PythonEnv/
+    Python/NNPython.exe          # 平台自带的 Python 3.8
+    pkgs/futu.zip                # SDK 本体（376 个函数 / 410 个类）
+    pkgs/indicator_lib.zip       # 技术指标库（fta / findicator / fplot ...）
+    res/strategy_template.py     # 官方策略模板
+```
+
+### 沙箱限制（实测，直接决定架构）
+
+| 限制 | 后果 |
+|---|---|
+| 禁止 import `ctypes / socket / multiprocessing / subprocess / sqlite` | 不能自己发网络请求 |
+| **禁止写文件**（`open` 带 `w/a/x/+` 抛 `ForbiddenOpError`）；**读文件允许** | 策略可以读外部配置，但不能落盘 |
+| **没有 numpy / pandas**（只有 futu + six + dateutil） | 策略内必须纯 Python |
+| Python 3.8 | 不能用 3.9+ 语法 |
+
+### 策略生命周期
+
+```python
+class Strategy(StrategyBase):
+    def trigger_symbols(self):   self.s1 = declare_trig_symbol(True)      # 驱动标的
+    def global_variables(self):  self.n = show_variable(10, GlobalType.INT)  # 可调参数
+    def custom_indicator(self):  pass
+    def initialize(self):        declare_strategy_type(AlgoStrategyType.SECURITY)
+    def handle_data(self):       ...            # 主逻辑
+    def handle_statistics(self): pass           # 回测统计钩子
+```
+平台自动追加 `main()` 调用，**策略文件不需要自己写入口**。
+
+### 数据接口（`futu.quant.strategy_interface_v2`，节选）
+
+| 用途 | 接口 |
+|---|---|
+| 取任意第 N 根 K 线 | `bar_close(symbol, bar_type=BarType.D1, select=2)`（同族：open/high/low/volume/turnover） |
+| 当前价 | `current_price(symbol, session=THType.ALL)` — 注意第二个参数是**时段**，不是价格类型 |
+| 均线 / EMA | `ma(symbol, period, bar_type, data_type, select)`、`ema(...)` |
+| ATR | `atr_atr(symbol, period=14, bar_type, select)` |
+| 历史波动率 | `historical_volatility(symbol, period, bar_type, select)` |
+| 每手股数 | `lot_size(symbol)` |
+| 行情时段常量 | `THType.ALL/RTH/ETH`、`TSType.ALL/RTH/ETH/OVERNIGHT` |
+| K 线周期 | `BarType.D1 / W1 / M1 / H1 / K_DAY ...` |
+
+**`select` 语义（关键）**：`1` = 当前未走完的 K 线，`2` = 最近一根**已收完**的，
+`2+k` = 往前 k 根。算动量必须用已收完的，所以基准偏移取 2。
+→ **`bar_close(sym, BarType.D1, 21+2)` 与 `bar_close(sym, BarType.D1, 252+2)` 相除即得 12-1 动量。**
+
+### 交易接口
+
+| 用途 | 接口 |
+|---|---|
+| 账户 | `total_cash(currency)`、`cash(...)`、`cash_buying_power(...)`、`max_qty_to_buy_on_cash(symbol, ord_type, price, ts_type)` |
+| 持仓 | `position_holding_qty(symbol)`、`available_qty(...)`、`position_cost(...)`、`position_pl_ratio(...)` |
+| 下单 | `place_market(symbol, qty, side, time_in_force)`、`place_limit(...)` |
+| **止损** | `place_stop(symbol, aux_price, qty, side, time_in_force)`、`place_trailing_stop(...)` |
+| 平仓 / 撤单 | `close_positions(symbol, qty=None)`、`cancel_order_by_symbol(...)`、`cancel_order_all()` |
+| 常量 | `OrderSide.BUY/SELL`、`TimeInForce.DAY/GTC/IOC`、`OrdType.MKT/LMT/STOP/...` |
+
+**注意：平台自带 `place_stop` / `place_trailing_stop`，所以 ATR 止损可以直接挂到券商侧**，
+不需要自己轮询——这正是 §5.4 里指出"大神们的护城河在风险管理层"在工程上的落点。
+
+### 关键架构限制（决定了策略怎么分工）
+
+富途量化的**驱动标的必须在界面上逐个声明，数量有限，无法扫描全市场**。
+所以"从 228 只里选前 10"这件事**不能**在策略里完成。正确的分工是：
+
+```
+选股端（本仓库，有 numpy/pandas，可扫全市场）
+    scripts/daily_pick.py --styles mom_12_1_raw --top 12
+        ↓  把 12 只填进界面的「驱动资产」
+执行端（富途量化，策略只管这 12 只）
+    scripts/ftquant_mom_12_1_raw.py
+        = 算 12-1 动量排序 + 等权买入前 K 只 + 挂 ATR 止损 + 每 21 交易日调仓
+```
+
+### 离线校验工具
+
+`scripts/validate_ftquant_strategy.py` 从客户端的 `futu.zip` 读出真实导出名单，
+静态校验策略文件：语法、**每个 API 调用是否真实存在**、是否用了被禁的 import、
+是否尝试写文件、是否定义了 `class Strategy(StrategyBase)`。
+存在的理由：策略只能在 GUI 里运行，一个拼错的 API 名要到用户点"运行"才暴露，
+这是最差的反馈回路；该脚本把它前移到本地、离线、秒级。
+
 ## 6. 下一步（按证据优先级）
 
 1. **补时点成分股（point-in-time membership）**：这是目前最大的方法论缺口，
