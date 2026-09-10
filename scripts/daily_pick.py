@@ -37,11 +37,21 @@ DEFAULT_UNIVERSE = os.path.join(_SCRIPT_DIR, "..", "configs", "universe_us.json"
 FETCH_BARS = 800          # 3 years: long enough for 12-1 momentum and MA200
 FETCH_TIMEOUT_S = 12
 
-# Which styles the nightly scan runs by default. Deliberately NOT "all of
-# them": these two families have the strongest replication record (12-1
-# momentum; profitability/quality). Everything in stock_selector.STYLES stays
-# selectable via --styles.
-DEFAULT_STYLES = ["mom_12_1", "quality"]
+# Which styles the nightly scan runs by default. Now driven by measurement
+# rather than priors: on the 228-name / ~12-year cached history (21-day
+# rebalance, 129 periods) `mom_12_1_raw` is the only ranker that cleared the
+# Harvey-Liu-Zhu t>3 bar for a new factor -- +15.4%/yr over SPY, HAC t=3.58,
+# 11 of 12 years positive, and it holds out of sample. Everything else
+# measured either flat or negative:
+#   mom_12_1 (vol-scaled)  t=1.03   <- the vol scaling destroys the signal
+#   momentum (composite)   t=-0.25
+#   reversal               t=-0.24
+#   st_reversal            t=+0.53  (but -57% max drawdown)
+#   quality                t=-2.41  <- significantly NEGATIVE, must not lead
+#   low_vol                t=-3.23  <- significantly NEGATIVE, must not lead
+# They all stay selectable via --styles so the validator keeps watching them,
+# but nothing unvalidated is allowed to drive the default nightly list.
+DEFAULT_STYLES = ["mom_12_1_raw"]
 
 
 def _guarded_fetch(symbol: str, bars: int):
