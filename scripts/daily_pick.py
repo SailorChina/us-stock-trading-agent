@@ -177,6 +177,10 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
                 scored[st].append({
                     "symbol": sym,
                     "score": res["score"],
+                    # Rank on the unclamped value when the style exposes one,
+                    # so a score that saturates at 100 does not collapse the
+                    # ordering into a tie (see momentum_12_1_raw_score).
+                    "rank": res.get("raw", res["score"]),
                     "reasons": res["reasons"],
                     "stats": res["stats"],
                     "close": ctx.get("close"),
@@ -192,7 +196,7 @@ def run_pick(universe_path: str = DEFAULT_UNIVERSE, styles=None, top: int = 8,
 
     # 4. rank and enrich the top names per style
     for st, rows in scored.items():
-        rows.sort(key=lambda r: r["score"], reverse=True)
+        rows.sort(key=lambda r: r["rank"], reverse=True)
         diversified = _sector_cap(rows, max_per_sector)
         picked = diversified[:top]
         enriched = []

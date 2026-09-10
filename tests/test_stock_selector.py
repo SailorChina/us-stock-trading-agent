@@ -46,6 +46,20 @@ def _downtrend(base, n, rng):
     return base * np.cumprod(1 + rng.normal(-0.004, 0.012, n))
 
 
+def _steep(base, n, rng):
+    """Strong 12-1 momentum (~+60%) so the display score saturates at 100."""
+    c = base * np.cumprod(1 + rng.normal(0.0018, 0.008, n))
+    c[-21:] = c[-22]                            # flat last month (skip window)
+    return c
+
+
+def _steeper(base, n, rng):
+    """Even stronger 12-1 momentum (~+130%), also saturating at 100."""
+    c = base * np.cumprod(1 + rng.normal(0.0042, 0.008, n))
+    c[-21:] = c[-22]
+    return c
+
+
 def _flat(base, n, rng):
     return np.full(n, base)
 
@@ -198,6 +212,37 @@ def test_momentum_12_1_needs_full_year():
     r = sel.momentum_12_1_score(_df(_uptrend, n=150))
     assert r["score"] == 0.0
     assert any("insufficient" in x for x in r["reasons"])
+
+
+def test_mom_12_1_raw_keeps_ordering_above_the_display_clamp():
+    """Regression: the first version clamped the RANKING variable at 100, so
+    every name with 12-1 momentum above +50% tied at exactly 100 and the
+    ordering collapsed precisely where the signal is strongest. `raw` must
+    stay strictly ordered; `score` may saturate."""
+    strong = sel.momentum_12_1_raw_score(_df(_steep))
+    stronger = sel.momentum_12_1_raw_score(_df(_steeper))
+    assert strong["score"] == 100.0 and stronger["score"] == 100.0   # both clamp
+    assert stronger["raw"] > strong["raw"]                            # but raw orders
+    assert "raw" in strong
+
+
+def test_mom_12_1_raw_needs_full_year():
+    r = sel.momentum_12_1_raw_score(_df(_uptrend, n=150))
+    assert r["score"] == 0.0
+    assert any("insufficient" in x for x in r["reasons"])
+
+
+def test_mom_12_1_raw_differs_from_vol_scaled_variant():
+    """The validated ranker must NOT divide by volatility - that scaling is
+    what dropped the same signal from t=3.58 to t=1.03. Guard the distinction
+    so a future 'cleanup' cannot silently merge the two."""
+    raw = sel.momentum_12_1_raw_score(_df(_steep))
+    scaled = sel.momentum_12_1_score(_df(_steep))
+    assert raw["score"] != scaled["score"]
+    assert "raw" in raw                            # raw exposes the unclamped rank
+    assert "raw" not in scaled                     # the scaled variant does not
+    assert "ann_vol_pct" not in raw["stats"]       # raw never estimates vol
+    assert raw["stats"]["mom_12_1_pct"] == scaled["stats"]["mom_12_1_pct"]
 
 
 def test_short_term_reversal_prefers_losers():

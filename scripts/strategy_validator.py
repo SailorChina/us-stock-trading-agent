@@ -92,9 +92,16 @@ def score_history(symbol: str, df, horizon: int = 5, window_bars: int = 0,
 
         if scorer is not None:
             try:
-                composite = scorer(window).get("score")
+                out = scorer(window)
             except Exception:
                 continue
+            # Prefer the ranker's UNCLAMPED value when it exposes one. A style
+            # that saturates its display score at 100 (momentum in a bull
+            # market) would otherwise be ranked on a tie and the validator
+            # would silently measure something much weaker than the live
+            # picker intends. `raw` is optional; scorers without it are
+            # unaffected.
+            composite = out.get("raw", out.get("score"))
             if composite is None:
                 continue
         else:

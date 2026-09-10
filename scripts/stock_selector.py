@@ -433,19 +433,24 @@ def momentum_12_1_raw_score(df: pd.DataFrame, lookback: int = 252,
     stats["mom_12_1_pct"] = round(mom * 100, 1)
     reasons = [f"12-1 momentum {mom * 100:+.0f}% (raw, unscaled)"]
 
-    # Monotone map to 0-100. Centred at 20% (the ~cross-sectional median for
-    # this universe), saturating at +-60% so a single 5x meme name cannot
-    # dominate the ranking the way an unbounded score would.
-    score = 50.0 + mom * 100.0
-    score = max(0.0, min(100.0, score))
-
+    # Rank on the RAW return, clamp only for the reported 0-100 display value.
+    # An earlier version clamped the ranking variable itself at 100, which in a
+    # momentum bull market flattened every name above +50% 12-1 into a single
+    # tie and destroyed the ordering exactly where the signal is strongest.
+    # `raw` carries the ordering; `score` is a monotone display transform.
+    raw = mom * 100.0
     ma200 = _ma(c, 200)
     if ma200 and c[-1] < ma200:
-        score = max(0.0, score - 10.0)
+        raw -= 10.0
         reasons.append("below MA200 (trend broken)")
     else:
         reasons.append("above MA200")
 
+    stats["raw_rank_score"] = round(raw, 1)
+    score = max(0.0, min(100.0, 50.0 + raw))
+
+    return {"score": round(score, 1), "raw": round(raw, 4),
+            "reasons": reasons[:5], "stats": stats}
     return {"score": round(score, 1), "reasons": reasons[:5], "stats": stats}
 
 
