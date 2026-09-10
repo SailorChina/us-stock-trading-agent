@@ -151,13 +151,40 @@ def _block_bootstrap_p(port: List[float], bench: List[float], n_iter: int = 2000
     return round(count / n_iter, 4)
 
 
+def _rows_from_panel(df, date_scores, horizon: int, min_bars: int = 60) -> List[Dict]:
+    """Align a precomputed {date_str: score} map onto the standard rebalance grid.
+
+    Uses the same convention as strategy_validator.score_history -- walk the
+    price frame from index `min_bars` in steps of `horizon` -- so the rows drop
+    straight into backtest_style and stay comparable with a price-based ranker,
+    including the forward return, which comes from the same closes.
+    """
+    if not date_scores or df is None or "close" not in df.columns or "time_key" not in df.columns:
+        return []
+    closes = df["close"].values
+    stamps = df["time_key"].tolist()
+    out = []
+    for t in range(min_bars, len(df) - horizon, horizon):
+        key = str(stamps[t])[:10]
+        score = date_scores.get(key)
+        if score is None:
+            continue
+        c = closes[t]
+        if not c:
+            continue
+        out.append({"date": key, "score": float(score), "raw": float(score),
+                    "fwd_ret": float((closes[t + horizon] - c) / c)})
+    return out
+
+
 def backtest_style(style: str, cache: Dict[str, pd.DataFrame], horizon: int = 21,
                    top_n: int = 10, min_names: int = 30,
                    cost_bps: float = COST_BPS_ONE_WAY,
                    top_quantile: Optional[float] = None,
                    index_members: Optional[Dict[str, List[str]]] = None,
                    scorer: Optional[Callable] = None,
-                   gate: Optional[Callable] = None) -> Dict:
+                   gate: Optional[Callable] = None,
+                   panel: Optional[Dict[str, Dict[str, float]]] = None) -> Dict:
     """Buy the top-N ranked names every `horizon` bars; measure what a trader gets.
 
     Unlike rank IC, this reports the *tradeable* outcome: annualised return,
@@ -176,8 +203,17 @@ def backtest_style(style: str, cache: Dict[str, pd.DataFrame], horizon: int = 21
     Clenow's "only open new positions while the index is above its 200-day
     MA" -- gets evaluated, since it is a switch on the whole book rather than
     a per-stock score.
+
+    `panel` scores from a precomputed {symbol: {date: score}} map instead of a
+    price-derived ranker. That is the only way to evaluate a factor the price
+    history cannot express -- quarterly fundamentals, whose value becomes known
+    at a report date rather than being derived from closes. Point-in-time
+    correctness is the CALLER's job (futu_fundamentals.latest_asof filters on an
+    availability date, not the period end); this function only aligns the given
+    scores to the shared rebalance grid and forward returns, so the metrics stay
+    directly comparable to every other ranker already measured here.
     """
-    if scorer is None:
+    if panel is None and scorer is None:
         from stock_selector import STYLES
         scorer = None if style == "composite" else STYLES.get(style)
         if style != "composite" and scorer is None:
@@ -186,11 +222,14 @@ def backtest_style(style: str, cache: Dict[str, pd.DataFrame], horizon: int = 21
     fetched = cached_fetcher(cache)
     per_symbol: Dict[str, Dict] = {}
     for sym in cache:
-        try:
-            rows = score_history(sym, cache[sym], horizon=horizon, step=horizon,
-                                 window_bars=0, scorer=scorer)
-        except Exception:
-            continue
+        if panel is not None:
+            rows = _rows_from_panel(cache[sym], panel.get(sym), horizon)
+        else:
+            try:
+                rows = score_history(sym, cache[sym], horizon=horizon, step=horizon,
+                                     window_bars=0, scorer=scorer)
+            except Exception:
+                rows = None
         if rows:
             per_symbol[sym] = {r["date"]: r for r in rows}
 
