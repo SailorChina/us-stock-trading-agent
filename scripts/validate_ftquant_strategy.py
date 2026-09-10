@@ -67,6 +67,48 @@ _BUILTINS = {
 }
 
 
+def load_platform_import_whitelist(sdk_path: str) -> Optional[Set[str]]:
+    """Read the platform's OWN import whitelist out of the client's SDK.
+
+    `futu/quant/quant_canvas_import_checker.is_allowed_module` is the authority
+    the GUI itself applies on import: legal iff the top-level module is in
+    `sys.stdlib_module_names` or is `futu`. Reading that list from the installed
+    client rather than hardcoding it means it tracks client updates.
+
+    It is also strictly stronger than a blacklist. A blacklist passes anything
+    nobody thought to forbid -- `import numpy`, `import pandas`, `import
+    requests` would all sail through here and then be rejected by the platform,
+    which is the failure this validator exists to prevent.
+
+    Returns None if the client's checker cannot be read (caller falls back to
+    the blacklist).
+    """
+    try:
+        with zipfile.ZipFile(sdk_path) as z:
+            src = z.read("futu/quant/quant_canvas_import_checker.py").decode("utf-8", "replace")
+    except Exception:
+        return None
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+
+    allowed: Set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+        if not any(n in ("_PYTHON_STDLIB_MODULES", "_QUANT_ALLOWED_MODULES") for n in names):
+            continue
+        # both modules are literal sets/frozensets of strings: the 3.10+ branch
+        # is `sys.stdlib_module_names` (not a literal) and the fallback is the
+        # explicit frozenset, so harvest whichever string constants are present
+        for sub in ast.walk(node.value):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                allowed.add(sub.value)
+    return allowed or None
+
+
 def find_sdk() -> Optional[str]:
     for pat in _SDK_GLOBS:
         hits = sorted(glob.glob(pat))
@@ -114,17 +156,25 @@ def check_strategy(path: str, sdk: Dict[str, Set[str]]) -> List[str]:
     if missing_req:
         problems.append("SDK is missing expected APIs: %s" % ", ".join(missing_req))
 
-    # --- forbidden imports -------------------------------------------------
+    # --- imports: the platform's whitelist, not a hand-written blacklist -----
+    whitelist = sdk.get("import_whitelist")
     for n in ast.walk(tree):
+        tops: List[str] = []
         if isinstance(n, ast.Import):
-            for a in n.names:
-                top = a.name.split(".")[0]
-                if top in _FORBIDDEN_IMPORTS:
-                    problems.append("forbidden import: %s (blocked by FTQuant sandbox)" % top)
+            tops = [a.name.split(".")[0] for a in n.names]
         elif isinstance(n, ast.ImportFrom):
-            top = (n.module or "").split(".")[0]
+            if n.level:
+                continue        # relative import, resolved inside the package
+            tops = [(n.module or "").split(".")[0]]
+        for top in tops:
+            if not top:
+                continue
             if top in _FORBIDDEN_IMPORTS:
                 problems.append("forbidden import: %s (blocked by FTQuant sandbox)" % top)
+            elif whitelist is not None and top not in whitelist:
+                problems.append(
+                    "import not allowed by the FTQuant whitelist: %s "
+                    "(allowed = Python stdlib + futu only)" % top)
 
     # --- forbidden file-write modes ---------------------------------------
     for n in ast.walk(tree):
@@ -168,8 +218,17 @@ def main(argv: List[str]) -> int:
         return 0
     sys.stdout.write("SDK: %s\n" % sdk_path)
     sdk = load_sdk_exports(sdk_path)
-    sys.stdout.write("SDK exports: %d functions, %d classes\n\n"
+    sdk["import_whitelist"] = load_platform_import_whitelist(sdk_path)
+    sys.stdout.write("SDK exports: %d functions, %d classes\n"
                      % (len(sdk["functions"]), len(sdk["classes"])))
+    wl = sdk["import_whitelist"]
+    if wl:
+        sys.stdout.write("Import whitelist: %d modules, read from the client's own "
+                         "quant_canvas_import_checker.py\n" % len(wl))
+    else:
+        sys.stdout.write("Import whitelist: UNAVAILABLE -- falling back to the "
+                         "sandbox blacklist only\n")
+    sys.stdout.write("\n")
 
     failed = 0
     for path in targets:

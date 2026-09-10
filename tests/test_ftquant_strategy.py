@@ -199,7 +199,56 @@ def test_repo_strategy_momentum_skips_the_recent_month():
 @pytest.mark.skipif(vfs.find_sdk() is None, reason="Futu client not installed")
 def test_repo_strategy_passes_full_sdk_validation():
     sdk = vfs.load_sdk_exports(vfs.find_sdk())
+    # include the platform's own import whitelist, or the import check is skipped
+    sdk["import_whitelist"] = vfs.load_platform_import_whitelist(vfs.find_sdk())
+    assert sdk["import_whitelist"], "whitelist should be readable from the client"
     assert vfs.check_strategy(STRATEGY, sdk) == []
+
+
+@pytest.mark.skipif(vfs.find_sdk() is None, reason="Futu client not installed")
+def test_import_whitelist_comes_from_the_client_not_a_hardcoded_list():
+    """The GUI allows stdlib + futu only. Read that from the installed client so
+    it tracks client updates instead of drifting from a hand-written copy."""
+    wl = vfs.load_platform_import_whitelist(vfs.find_sdk())
+    assert wl
+    for ok in ("sys", "json", "math", "futu"):
+        assert ok in wl, ok
+    for bad in ("numpy", "pandas", "requests"):
+        assert bad not in wl, bad
+
+
+def test_whitelist_catches_third_party_imports_a_blacklist_would_miss(tmp_path):
+    """`import numpy` is not in the sandbox blacklist, but the platform rejects it.
+
+    A blacklist only fails what someone remembered to forbid; the platform
+    applies a whitelist. Validating against the weaker rule would let a strategy
+    reach the GUI and die there -- the exact outcome this file prevents.
+    """
+    p = tmp_path / "strat_numpy.py"
+    p.write_text(
+        "import numpy\n"
+        "import sys\n"
+        "from futu.quant.strategy_base import StrategyBase\n"
+        "class Strategy(StrategyBase):\n"
+        "    pass\n", encoding="utf-8")
+    sdk = vfs.load_sdk_exports(vfs.find_sdk()) if vfs.find_sdk() else {
+        "functions": set(), "classes": set()}
+    sdk["import_whitelist"] = {"sys", "json", "futu"}
+    sdk["functions"] = set(vfs._REQUIRED_APIS)
+    sdk["classes"] = set()
+    problems = vfs.check_strategy(str(p), sdk)
+    assert any("whitelist" in m and "numpy" in m for m in problems), problems
+
+
+def test_no_whitelist_falls_back_to_the_blacklist(tmp_path):
+    """If the client's checker cannot be read, keep working with the blacklist
+    rather than silently passing every import."""
+    p = tmp_path / "strat_socket.py"
+    p.write_text("import socket\n", encoding="utf-8")
+    sdk = {"functions": set(vfs._REQUIRED_APIS), "classes": set(),
+           "import_whitelist": None}
+    problems = vfs.check_strategy(str(p), sdk)
+    assert any("forbidden import: socket" in m for m in problems), problems
 
 
 @pytest.mark.skipif(vfs.find_sdk() is None, reason="Futu client not installed")

@@ -52,6 +52,7 @@ which is exactly what an amount-based order buys.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import glob
 import json
 import os
@@ -127,8 +128,25 @@ def _from_cache(symbol: str):
     return df["close"].to_numpy(dtype=float)
 
 
-def fetch_closes(symbols: List[str], from_cache: bool, ctx) -> Dict[str, list]:
-    """Return {symbol: [closes newest-last]}, skipping anything too short."""
+def fetch_closes(symbols: List[str], from_cache: bool, ctx,
+                 max_stale_days: int = 10, fetcher=None) -> Dict[str, list]:
+    """Return {symbol: [closes newest-last]}, skipping anything too short.
+
+    The online branch used to make ONE request per symbol with a date range:
+
+        ctx.request_history_kline(s, start=<504d ago>, end=<today>, max_count=315)
+
+    futu answers that with the FIRST 315 bars of the range, not the last.
+    Measured directly: for [2025-04-24 .. 2026-09-10] it returned 315 rows ending
+    2026-07-27 -- six weeks short, with no error. The signal then ran on stale
+    prices and produced a top-5 that disagreed with the same signal fetched
+    correctly, and orders were placed from it.
+
+    So the fetch is now the shared, PAGINATING, rate-limit-aware one in
+    futu_pacing, and the freshness guard below makes the same class of bug loud
+    instead of silent: a series whose last bar is `max_stale_days` old is dropped
+    and reported rather than scored.
+    """
     out: Dict[str, list] = {}
     if from_cache:
         for s in symbols:
@@ -137,16 +155,33 @@ def fetch_closes(symbols: List[str], from_cache: bool, ctx) -> Dict[str, list]:
                 out[s] = list(arr)
         return out
 
+    from futu_pacing import PacedFetcher, closes_from, last_bar_date
+    fetch = fetcher or PacedFetcher()
+    stale: List[str] = []
+    today = dt.date.fromisoformat(_today())
     for s in symbols:
         try:
-            ret, df, _ = ctx.request_history_kline(
-                s, start=(_date_days_ago(LOOKBACK * 2)), end=_today(),
-                max_count=MIN_BARS + 40)
-            if ret != 0 or df is None or df.empty or len(df) < MIN_BARS:
+            df = fetch(s, LOOKBACK * 2)
+            closes = closes_from(df)
+            if not closes or len(closes) < MIN_BARS:
                 continue
-            out[s] = [float(x) for x in df["close"].tolist()]
+            d = last_bar_date(df)
+            if d:
+                age = (today - dt.date.fromisoformat(d)).days
+                if age > max_stale_days:
+                    stale.append((s, d, age))
+                    continue
+            out[s] = closes
         except Exception:
             continue
+
+    if stale:
+        stale.sort(key=lambda t: -t[2])
+        print("WARNING: %d symbol(s) returned STALE bars and were skipped "
+              "(oldest %s, %d days old). The signal would otherwise be computed "
+              "on old prices without any error." % (len(stale), stale[0][1], stale[0][2]))
+        print("         first few: %s"
+              % ", ".join("%s@%s(%dd)" % (s, d, a) for s, d, a in stale[:5]))
     return out
 
 
@@ -360,15 +395,29 @@ def get_cash(ft, trade_ctx, trd_env) -> float:
     return 0.0
 
 
-def execute_plan(ft, quote_ctx, trade_ctx, trd_env, plan_data: dict) -> List[str]:
-    """Place the plan. Returns a log of what was attempted."""
+def execute_plan(ft, quote_ctx, trade_ctx, trd_env, plan_data: dict,
+                 holdings: Optional[Dict[str, float]] = None) -> List[str]:
+    """Place the plan. Returns a log of what was attempted.
+
+    Sells need the actual held quantity. This used to submit `qty=0`, which the
+    API answers with "invalid quantity" -- so every SELL silently failed while
+    the log still recorded the attempt. Discovered on the paper account: the
+    rebalance sold nothing and then bought the new names on margin, leaving the
+    book holding eight names instead of five.
+    """
     log = []
     for sym in plan_data["sells"]:
+        qty = int(float((holdings or {}).get(sym, 0) or 0))
+        if qty <= 0:
+            log.append("SELL %s -> skipped (no held quantity known; "
+                       "pass holdings= to sell a real position)" % sym)
+            continue
         try:
             ret, data = trade_ctx.place_order(
-                price=0, qty=0, code=sym, trd_side=ft.TrdSide.SELL,
+                price=0, qty=qty, code=sym, trd_side=ft.TrdSide.SELL,
                 order_type=ft.OrderType.MARKET, trd_env=trd_env)
-            log.append("SELL %s -> %s" % (sym, "ok" if ret == ft.RET_OK else data))
+            log.append("SELL %s x%d -> %s" % (sym, qty,
+                                              "ok" if ret == ft.RET_OK else data))
         except Exception as e:
             log.append("SELL %s -> EXC %s" % (sym, e))
 
@@ -513,7 +562,8 @@ def main(argv=None) -> int:
                 print("\n" + warn)
 
         if args.execute:
-            for line in execute_plan(ft, quote_ctx, trade_ctx, trd_env, plan_data):
+            for line in execute_plan(ft, quote_ctx, trade_ctx, trd_env,
+                                     plan_data, holdings):
                 print(line)
         else:
             print("\n(dry run -- re-run with --execute to send these orders)")

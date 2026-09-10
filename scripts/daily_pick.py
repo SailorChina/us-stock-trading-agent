@@ -43,14 +43,14 @@ DEFAULT_UNIVERSE = os.path.join(_SCRIPT_DIR, "..", "configs", "universe_us.json"
 FETCH_BARS = 800          # 3 years: long enough for 12-1 momentum and MA200
 FETCH_TIMEOUT_S = 12
 
-# request_history_kline is rate limited. Measured on this host: a cold burst
-# succeeds for ~40 calls in a row, then EVERY subsequent call fails immediately
-# (no exception, just an error) until the window rolls -- 20s later it works
-# again, 10s later it does not. That is a sliding window of roughly 60 calls per
-# 30 seconds. Pace under it rather than discovering it the hard way.
-FETCH_MAX_PER_WINDOW = 30      # half the observed limit
-FETCH_WINDOW_S = 30.0
-FETCH_RETRY_COOLDOWN_S = 31.0  # one full window, so the retry is not refused
+# Pacing, rate-limit handling and the paginating fetch live in futu_pacing so
+# that this scanner and live_trader cannot drift apart again -- they once held
+# two copies of this logic and only one of them paginated, which made the two
+# tools disagree about the same signal on the same day.
+from futu_pacing import (MAX_PER_WINDOW as FETCH_MAX_PER_WINDOW,
+                         WINDOW_S as FETCH_WINDOW_S,
+                         COOLDOWN_S as FETCH_RETRY_COOLDOWN_S,
+                         PacedFetcher as _PacedFetcher)
 
 # Which styles the nightly scan runs by default. Now driven by measurement
 # rather than priors: on the 228-name / ~12-year cached history (21-day
@@ -70,25 +70,14 @@ DEFAULT_STYLES = ["mom_12_1_raw"]
 
 
 def _guarded_fetch(symbol: str, bars: int):
-    """fetch_kline wrapped in a daemon thread so one bad symbol cannot hang
-    the whole nightly scan."""
-    from tech_engine import fetch_kline
-    box = {}
+    """Deprecated alias: the timeout-guarded fetch now lives in futu_pacing.
 
-    def _run():
-        try:
-            box["df"] = fetch_kline(symbol, "1d", bars)
-        except Exception as exc:
-            box["err"] = exc
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(timeout=FETCH_TIMEOUT_S)
-    if t.is_alive():
-        return None
-    if "err" in box:
-        return None
-    return box.get("df")
+    Kept so nothing that still imports the old name breaks, and so the reason is
+    written down: this function and live_trader's fetch were two copies of one
+    concern, and only one of them paginated.
+    """
+    from futu_pacing import fetch_kline_guarded
+    return fetch_kline_guarded(symbol, bars, timeout_s=FETCH_TIMEOUT_S)
 
 
 def _hot_symbols(top: int = 40) -> list:
@@ -114,68 +103,6 @@ def _liquidity(df) -> dict:
     px = float(c[-1])
     adv = float(np.mean(c[-21:] * v[-21:])) if n >= 21 else float(np.mean(c * v))
     return {"price": px, "adv_usd": adv, "bars": n}
-
-
-class _PacedFetcher:
-    """Rate-limit-aware history fetch.
-
-    Why this exists: an unpaced 228-name scan does NOT fail loudly, it fails
-    QUANTITATIVELY. Measured on this host, a cold burst succeeds for ~40
-    consecutive request_history_kline calls and then every subsequent call
-    returns an error immediately, with no exception raised, until the window
-    rolls. daily_pick's online run therefore reported "228 scanned, 48 passed,
-    180 dropped" and produced a candidate list built from a gutted universe --
-    and a DIFFERENT book from the offline run (online MU/INTC/AMAT/CRWD/PANW
-    versus offline MU/WDC/STX/INTC/DELL). A plausible-looking wrong answer is
-    the worst failure mode available, so the fetch is paced and retried.
-    """
-
-    def __init__(self, fetch=None, max_per_window: int = FETCH_MAX_PER_WINDOW,
-                 window_s: float = FETCH_WINDOW_S,
-                 cooldown_s: float = FETCH_RETRY_COOLDOWN_S,
-                 max_cooldowns: int = 6):
-        self._fetch = fetch or (lambda s, b: _guarded_fetch(s, b))
-        self._max = max_per_window
-        self._window = window_s
-        self._cooldown = cooldown_s
-        self._max_cooldowns = max_cooldowns
-        self._times: collections.deque = collections.deque()
-        self.cooldowns_used = 0
-        self.failed = 0
-
-    def _throttle(self) -> None:
-        now = time.monotonic()
-        while self._times and now - self._times[0] > self._window:
-            self._times.popleft()
-        if len(self._times) >= self._max:
-            pause = self._window - (now - self._times[0]) + 0.05
-            if pause > 0:
-                time.sleep(pause)
-            now = time.monotonic()
-            while self._times and now - self._times[0] > self._window:
-                self._times.popleft()
-        self._times.append(now)
-
-    def __call__(self, symbol: str, bars: int):
-        self._throttle()
-        df = self._fetch(symbol, bars)
-        if df is not None:
-            return df
-        # A None here is USUALLY the rate limit, not a dead ticker. Cool down a
-        # full window and retry the same name once. The cap matters: without it,
-        # a universe full of genuinely unavailable symbols becomes an hour of
-        # sleeping instead of a fast, honest list of failures.
-        if self.cooldowns_used >= self._max_cooldowns:
-            self.failed += 1
-            return None
-        self.cooldowns_used += 1
-        time.sleep(self._cooldown)
-        self._times.clear()
-        self._throttle()
-        df = self._fetch(symbol, bars)
-        if df is None:
-            self.failed += 1
-        return df
 
 
 def _cache_fetcher(cache_dir: str = None):

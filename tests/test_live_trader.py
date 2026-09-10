@@ -257,6 +257,66 @@ def test_execute_plan_coerces_qty_to_int():
     assert "int(b[\"qty\"])" in src
 
 
+def test_execute_plan_sells_the_actual_held_quantity():
+    """A SELL submitted with qty=0 is rejected as "invalid quantity".
+
+    This shipped. Every sell in the paper rebalance failed without raising, the
+    log still recorded the attempt, and because the buys went through the account
+    ended up holding eight names instead of five -- bought on margin. A plan that
+    says "sell US.AMAT" is worthless without the quantity behind it.
+    """
+    class _FakeFt:
+        RET_OK = 0
+
+        class TrdSide:
+            SELL = "SELL"
+            BUY = "BUY"
+
+        class OrderType:
+            MARKET = "MARKET"
+
+    calls = []
+
+    class _Ctx:
+        def place_order(self, **kw):
+            calls.append(kw)
+            return 0, "ok"
+
+    lt.execute_plan(_FakeFt, None, _Ctx(), "SIMULATE",
+                    {"sells": ["US.OLD"], "buys": []},
+                    holdings={"US.OLD": 37.0})
+    assert calls, "a sell with a known quantity must be submitted"
+    assert calls[0]["code"] == "US.OLD"
+    assert calls[0]["qty"] == 37, "must sell the HELD quantity, not 0"
+    assert isinstance(calls[0]["qty"], int)
+
+
+def test_execute_plan_refuses_a_sell_without_a_known_quantity():
+    """Better to say nothing was sold than to submit a zero-qty order the API
+    will reject silently."""
+    class _FakeFt:
+        RET_OK = 0
+
+        class TrdSide:
+            SELL = "SELL"
+            BUY = "BUY"
+
+        class OrderType:
+            MARKET = "MARKET"
+
+    calls = []
+
+    class _Ctx:
+        def place_order(self, **kw):
+            calls.append(kw)
+            return 0, "ok"
+
+    log = lt.execute_plan(_FakeFt, None, _Ctx(), "SIMULATE",
+                          {"sells": ["US.OLD"], "buys": []})
+    assert calls == [], "must not submit a qty=0 sell"
+    assert any("US.OLD" in line and "skipped" in line for line in log), log
+
+
 def test_plan_qty_is_always_an_integer():
     ranked = _ranked(("US.A", 0.9, 333.0), ("US.B", 0.8, 77.0))
     p = lt.plan(ranked, holdings={}, capital=1000.0, top_n=2)

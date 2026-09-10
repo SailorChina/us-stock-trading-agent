@@ -680,6 +680,88 @@ python scripts/daily_pick.py --top 5 --capital 3000 --sheet --no-hot \
 
 **离线复核**（不联网、秒级、确定性）：加 `--from-cache`。
 
+## 10. 模拟账户实跑 + 发现「过期数据」静默 bug（2026-09-10）
+
+### 10.1 富途量化（FTQuant）回测**无法脱离 GUI 运行**——已证死
+
+用户要求"在富途牛牛软件量化里回测"。我按前面的做法（不点 GUI、逆向 SDK）查了一遍，
+结论是**这条路没有可编程入口**：
+
+| 证据 | 说明 |
+|---|---|
+| `res/strategy_template.py` | 导入 `from futu.quant.runner import main, enable_debug_mode` |
+| `futu/quant/runner.py::_set_cmd_args` | `run_mode` / `strategy_id` / `arg_id` **全部来自原生模块 `_futuinternal`**（`get_run_mode()` / `get_strategy_id()` / `get_run_id()`） |
+| `futu/common/constant.py::RunMode` | 有 `NORMAL / QUANT / BACKTEST`，但取值来自 `_futuinternal.RunMode_Backtest` |
+| `NNPython.exe` | **平台专用启动器**，不是普通解释器：`argv[1]=3264`（run id）；传 `-c` 只回显 `-c` |
+| 平台自带检查器 | `quant_code_analyzer.py` 依赖 `_futuinternal` + pylint；`futu/__init__.py` 也 import `_futuinternal` ⇒ 系统 Python 下无法运行 |
+
+⇒ **回测引擎（FTQuant.dll / FTQuantServer.dll + `_futuinternal`）由桌面端驱动。**
+要无 GUI 跑就得逆向原生 IPC —— 大、脆弱、且每次客户端更新都会崩。**不做。**
+
+### 10.2 但拿到了**平台自己的 import 白名单**（比自写黑名单强得多）
+
+`futu/quant/quant_canvas_import_checker.py`：
+
+```python
+_QUANT_ALLOWED_MODULES = frozenset({'futu'})
+def is_allowed_module(m): return m in sys.stdlib_module_names or m in _QUANT_ALLOWED_MODULES
+```
+
+⇒ **只允许 Python 标准库 + `futu`**。`numpy` / `pandas` / `requests` 全部会被拒。
+已把 `validate_ftquant_strategy.py` 改为**从客户端自己的 SDK 里读出这个白名单**
+（用 `ast` 解析该模块，随客户端版本自动更新），不再用手写黑名单。
+实测：**118 个模块**，`ftquant_mom_12_1_raw.py` 通过。
+
+**为什么值得改**：黑名单只会拦住"想起来要禁"的东西 —— `import numpy` 不在黑名单里，
+会一路通过本地校验、然后在 GUI 里被拒。**按更弱的规则校验，等于把失败推迟到 GUI。**
+
+### 10.3 用富途 skill 实际操控了模拟账户（真下单）
+
+- 技能脚本：`trade/get_accounts.py`（10 个账户）、`trade/get_portfolio.py`、
+  `get_orders.py`、`place_order.py`。
+- 模拟盘（US / SIMULATE）：**现金 $1,000,002.59、0 持仓**。
+- 用 `live_trader.py --top 5 --execute` **真发单**，5 笔市价单全部成交。
+- 随后发现信号取数有 bug（10.4），用修好的版本**重新调仓**并核对持仓。
+
+### 10.4 ★ 发现：`live_trader` 一直用**六周前的数据**选股（静默）
+
+第一次执行时它只 `scored 60 of 228`、且选出的 top-5 与 `daily_pick` 不一致
+（MU/INTC/MRVL/AMAT/AMD vs MU/WDC/STX/INTC/DELL），MU 的 close 是 900.20
+（当日真实价约 988）。查下去是：
+
+```python
+ctx.request_history_kline(sym, start=<504天前>, end=<今天>, max_count=315)
+```
+
+**futu 返回的是区间的【前】315 根，不是【最后】315 根。** 直接实测：
+
+```
+range: [2025-04-24 .. 2026-09-10]  max_count=315
+rows: 315
+FIRST bar: 2025-04-24 close 77.22
+LAST  bar: 2026-07-27 close 900.2     <- 比扫描日早 45 天
+momentum_12_1 = 9.877                 <- +987.7%，而正确值是 +543%
+```
+
+⇒ **序列停在 2026-07-27**，动量窗口整体后移六周，**没有任何报错**，
+且**输出看起来完全合理** —— 然后据此下了真实（模拟）单。
+
+**根因是代码重复**：`daily_pick` 走 `tech_engine.fetch_kline`（会翻页、会算起始日期），
+`live_trader` 自己写了一份单次区间请求。两份实现 = 迟早不一致。
+
+**修复（三处）**：
+1. 抽出共享模块 `scripts/futu_pacing.py`（**会翻页** + **节流 30/30 秒** +
+   冷却 31s 重试同一只 + 冷却封顶 6），`daily_pick` 与 `live_trader` **共用同一份**。
+2. `live_trader.fetch_closes` 改用该取数器。
+3. 加**数据新鲜度守卫**：最后一根 bar 距今超过 `max_stale_days`（默认 10 天）就
+   **跳过该标的并打印警告**，而不是拿去打分。
+   （`live_trader` 原先还缺节流，也一并按掉了。）
+
+**教训（第 3 次同类）**：
+**"取数失败"被当成了"过滤掉"**（60 of 228 看起来像过滤），
+**"数据过期"看起来像正常数据**（没有错误、数值合理）。
+⇒ **凡是会被静默降级的环节，都要显式报数/报龄。**
+
 ## 参考来源
 
 - Hou, Xue & Zhang, *Replicating Anomalies*（452 异象复现，存活 momentum/profitability/investment/value）
